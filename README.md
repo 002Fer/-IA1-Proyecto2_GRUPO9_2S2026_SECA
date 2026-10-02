@@ -65,6 +65,13 @@ source .venv/bin/activate
 
 Con el entorno virtual activado:
 
+Ejecutar el siguiente comando para instalar todas las dependecias:
+
+```bash
+python -m pip install -r requirements.txt
+
+```
+O ejecutar espesificamente la instalacion de opencv y mediapipe
 ```bash
 pip install opencv-python mediapipe
 ```
