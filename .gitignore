@@ -50,3 +50,6 @@ dist/
 *.jpg
 *.jpeg
 *.png
+
+# Descargas de RPA
+downloads/
