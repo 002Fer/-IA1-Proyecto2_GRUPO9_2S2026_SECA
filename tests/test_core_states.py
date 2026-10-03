@@ -1,6 +1,6 @@
 ﻿import unittest
 
-from ui.states import RobotState, STATE_LABELS, get_state_label
+from core.states import RobotState, STATE_LABELS, get_state_label
 
 
 class TestRobotState(unittest.TestCase):
@@ -46,3 +46,4 @@ class TestRobotState(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
