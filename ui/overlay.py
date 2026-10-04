@@ -438,3 +438,224 @@ class AugmentedRealityOverlay:
         )
 
         return frame
+
+
+GESTURE_PRESENTATION = {
+    "HAND_RAISED": (
+        "Saludo detectado",
+        "Responder"
+    ),
+    "THUMBS_UP": (
+        "Aprobacion",
+        "Confirmar"
+    ),
+    "THUMBS_DOWN": (
+        "Desaprobacion",
+        "Cambiar respuesta"
+    ),
+    "POINT_LEFT": (
+        "Direccion izquierda",
+        "Mostrar opcion izquierda"
+    ),
+    "POINT_RIGHT": (
+        "Direccion derecha",
+        "Mostrar opcion derecha"
+    ),
+    "ARMS_CROSSED": (
+        "Comando de accion",
+        "Ejecutar accion"
+    ),
+    "INDEX_UP": (
+        "Consulta de horario",
+        "Consultar horario"
+    ),
+    "INDEX_DOWN": (
+        "Solicitud de material",
+        "Descargar material"
+    ),
+    "WRITE_GESTURE": (
+        "Escritura detectada",
+        "Completar formulario"
+    ),
+}
+
+
+class AuraUI:
+    """
+    Interfaz de alto nivel para la presentación visual de AURA.
+
+    Integra:
+    - RobotStateController
+    - RobotRenderer
+    - AugmentedRealityOverlay
+
+    El orquestador únicamente necesita proporcionar el resultado
+    de VisionDetector y, cuando corresponda, el estado de una
+    ejecución externa.
+    """
+
+    def __init__(
+        self,
+        state_controller=None,
+        robot_renderer=None,
+        overlay=None
+    ):
+        from core.states import RobotStateController
+
+        self.state_controller = (
+            state_controller
+            if state_controller is not None
+            else RobotStateController()
+        )
+
+        self.robot_renderer = (
+            robot_renderer
+            if robot_renderer is not None
+            else RobotRenderer()
+        )
+
+        self.overlay = (
+            overlay
+            if overlay is not None
+            else AugmentedRealityOverlay(
+                robot_renderer=self.robot_renderer
+            )
+        )
+
+    @staticmethod
+    def resolve_presentation(
+        state,
+        gesture="UNKNOWN",
+        interpretation=None,
+        action=None
+    ):
+        """
+        Obtiene los textos visuales asociados al estado actual.
+
+        Los valores interpretation/action enviados por el
+        orquestador tienen prioridad sobre los textos por defecto.
+        """
+        defaults = {
+            RobotState.IDLE: (
+                "Esperando usuario",
+                "Ninguna"
+            ),
+            RobotState.GREETING: (
+                "Persona detectada",
+                "Saludar"
+            ),
+            RobotState.DETECTING: (
+                "Observando",
+                "Esperar gesto"
+            ),
+            RobotState.EXECUTING: (
+                "Accion en curso",
+                "Ejecutando proceso"
+            ),
+            RobotState.SUCCESS: (
+                "Accion completada",
+                "Proceso finalizado"
+            ),
+            RobotState.ERROR: (
+                "Fallo en la accion",
+                "Revisar resultado"
+            ),
+            RobotState.GOODBYE: (
+                "Persona ausente",
+                "Despedirse"
+            ),
+        }
+
+        if state == RobotState.THINKING:
+            default_interpretation, default_action = (
+                GESTURE_PRESENTATION.get(
+                    gesture,
+                    (
+                        "Interpretando",
+                        "Ninguna"
+                    )
+                )
+            )
+        else:
+            default_interpretation, default_action = (
+                defaults.get(
+                    state,
+                    (
+                        "Procesando",
+                        "Ninguna"
+                    )
+                )
+            )
+
+        return (
+            interpretation
+            if interpretation is not None
+            else default_interpretation,
+            action
+            if action is not None
+            else default_action,
+        )
+
+    def process(
+        self,
+        vision_result,
+        execution_status=None,
+        interpretation=None,
+        action=None,
+        now=None
+    ):
+        """
+        Procesa un resultado de VisionDetector y devuelve
+        toda la información visual necesaria para mostrar AURA.
+
+        execution_status:
+            None
+            running
+            success
+            error
+        """
+        if vision_result is None:
+            raise ValueError(
+                "vision_result no puede ser None."
+            )
+
+        gesture = vision_result.get(
+            "gesture",
+            "UNKNOWN"
+        )
+
+        person_detected = vision_result.get(
+            "person_detected",
+            False
+        )
+
+        state = self.state_controller.update(
+            person_detected=person_detected,
+            gesture=gesture,
+            execution_status=execution_status,
+            now=now
+        )
+
+        resolved_interpretation, resolved_action = (
+            self.resolve_presentation(
+                state=state,
+                gesture=gesture,
+                interpretation=interpretation,
+                action=action
+            )
+        )
+
+        frame = self.overlay.render(
+            vision_result,
+            state=state,
+            interpretation=resolved_interpretation,
+            action=resolved_action
+        )
+
+        return {
+            "frame": frame,
+            "state": state,
+            "state_label": get_state_label(state),
+            "interpretation": resolved_interpretation,
+            "action": resolved_action,
+        }
