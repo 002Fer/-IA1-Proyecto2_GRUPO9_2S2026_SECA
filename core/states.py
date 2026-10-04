@@ -38,12 +38,19 @@ def get_state_label(state: RobotState) -> str:
 
 class RobotStateController:
     """
-    Controla los estados visuales del robot AURA a partir de
-    la percepción recibida.
+    Controla los estados visuales del robot AURA.
 
-    Incluye estabilización temporal para evitar que detecciones
-    intermitentes de presencia provoquen cambios visuales bruscos.
+    Combina:
+    - estabilidad de presencia;
+    - reconocimiento de gestos;
+    - estados de ejecución provenientes del orquestador.
     """
+
+    EXECUTION_STATUSES = {
+        "running",
+        "success",
+        "error",
+    }
 
     def __init__(
         self,
@@ -51,7 +58,9 @@ class RobotStateController:
         absence_confirm=1.0,
         greeting_duration=2.0,
         goodbye_duration=2.0,
-        thinking_hold=0.6
+        thinking_hold=0.6,
+        success_duration=2.0,
+        error_duration=2.0
     ):
         durations = (
             presence_confirm,
@@ -59,6 +68,8 @@ class RobotStateController:
             greeting_duration,
             goodbye_duration,
             thinking_hold,
+            success_duration,
+            error_duration,
         )
 
         if any(value < 0 for value in durations):
@@ -71,6 +82,8 @@ class RobotStateController:
         self.greeting_duration = greeting_duration
         self.goodbye_duration = goodbye_duration
         self.thinking_hold = thinking_hold
+        self.success_duration = success_duration
+        self.error_duration = error_duration
 
         self.state = RobotState.IDLE
         self._state_since = None
@@ -86,6 +99,29 @@ class RobotStateController:
             return time.monotonic()
 
         return float(now)
+
+    @classmethod
+    def _normalize_execution_status(
+        cls,
+        execution_status
+    ):
+        if execution_status is None:
+            return None
+
+        normalized = str(
+            execution_status
+        ).strip().lower()
+
+        if normalized in ("", "none", "idle"):
+            return None
+
+        if normalized not in cls.EXECUTION_STATUSES:
+            raise ValueError(
+                "Estado de ejecucion no soportado: "
+                f"{execution_status}"
+            )
+
+        return normalized
 
     def reset(self, now=None):
         """
@@ -106,7 +142,7 @@ class RobotStateController:
     @property
     def stable_present(self):
         """
-        Indica si la presencia de una persona ya fue confirmada.
+        Indica si la presencia fue confirmada.
         """
         return self._stable_present
 
@@ -115,31 +151,95 @@ class RobotStateController:
             self.state = state
             self._state_since = now
 
+    def _handle_execution_status(
+        self,
+        execution_status,
+        now
+    ):
+        """
+        Procesa el estado externo de una accion.
+
+        Retorna un RobotState cuando la ejecución debe tener
+        prioridad visual. Retorna None cuando el flujo normal
+        debe continuar.
+        """
+        status = self._normalize_execution_status(
+            execution_status
+        )
+
+        if status == "running":
+            self._set_state(
+                RobotState.EXECUTING,
+                now
+            )
+
+            return self.state
+
+        if status == "success":
+            self._set_state(
+                RobotState.SUCCESS,
+                now
+            )
+
+            return self.state
+
+        if status == "error":
+            self._set_state(
+                RobotState.ERROR,
+                now
+            )
+
+            return self.state
+
+        if self.state == RobotState.SUCCESS:
+            elapsed = now - self._state_since
+
+            if elapsed < self.success_duration:
+                return self.state
+
+        if self.state == RobotState.ERROR:
+            elapsed = now - self._state_since
+
+            if elapsed < self.error_duration:
+                return self.state
+
+        return None
+
     def update(
         self,
         person_detected,
         gesture="UNKNOWN",
+        execution_status=None,
         now=None
     ):
         """
-        Actualiza el estado visual usando la percepción actual.
+        Actualiza el estado visual.
 
-        person_detected:
-            Presencia reportada por Computer Vision.
-
-        gesture:
-            Gesto actualmente reconocido.
-
-        now:
-            Tiempo opcional para pruebas deterministas.
-            En ejecución real se utiliza time.monotonic().
+        execution_status puede ser:
+        - None
+        - running
+        - success
+        - error
         """
         now = self._resolve_time(now)
 
         if self._state_since is None:
             self._state_since = now
 
-        person_detected = bool(person_detected)
+        execution_state = (
+            self._handle_execution_status(
+                execution_status,
+                now
+            )
+        )
+
+        if execution_state is not None:
+            return execution_state
+
+        person_detected = bool(
+            person_detected
+        )
+
         gesture = gesture or "UNKNOWN"
 
         # --------------------------------------------------
@@ -182,7 +282,8 @@ class RobotStateController:
                     self._presence_candidate_since = now
 
                 presence_time = (
-                    now - self._presence_candidate_since
+                    now
+                    - self._presence_candidate_since
                 )
 
                 if presence_time >= self.presence_confirm:
@@ -205,7 +306,10 @@ class RobotStateController:
                         now - self._state_since
                     )
 
-                    if goodbye_time >= self.goodbye_duration:
+                    if (
+                        goodbye_time
+                        >= self.goodbye_duration
+                    ):
                         self._set_state(
                             RobotState.IDLE,
                             now
@@ -227,7 +331,10 @@ class RobotStateController:
                 now - self._state_since
             )
 
-            if greeting_time < self.greeting_duration:
+            if (
+                greeting_time
+                < self.greeting_duration
+            ):
                 return self.state
 
             self._set_state(
@@ -236,7 +343,7 @@ class RobotStateController:
             )
 
         # --------------------------------------------------
-        # INTERPRETACIÓN DE GESTO
+        # INTERPRETACIÓN DEL GESTO
         # --------------------------------------------------
         if gesture != "UNKNOWN":
             self._last_gesture_at = now
@@ -248,8 +355,6 @@ class RobotStateController:
 
             return self.state
 
-        # Mantener THINKING brevemente aunque Vision pierda
-        # el gesto durante uno o varios frames.
         if (
             self.state == RobotState.THINKING
             and self._last_gesture_at is not None
@@ -258,7 +363,10 @@ class RobotStateController:
                 now - self._last_gesture_at
             )
 
-            if gesture_elapsed < self.thinking_hold:
+            if (
+                gesture_elapsed
+                < self.thinking_hold
+            ):
                 return self.state
 
         self._last_gesture_at = None
