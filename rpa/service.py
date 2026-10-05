@@ -35,29 +35,32 @@ class RPAService:
 
     @classmethod
     def listar_procesos(cls) -> List[Dict[str, str]]:
-        """Retorna la lista de procesos RPA disponibles (ideal para comando /rpa en Telegram)."""
+        # Retorna la lista de procesos RPA disponibles
         return cls.PROCESOS_DISPONIBLES
 
     @staticmethod
     async def ejecutar_horario(headless: bool = True) -> Dict[str, Any]:
-        """Ejecuta el proceso RPA 1 de consulta de horario."""
+        # Ejecuta el proceso RPA 1 de consulta de horario.
         return await consultar_horario(headless=headless)
 
     @staticmethod
-    async def ejecutar_descarga_material(headless: bool = True) -> Dict[str, Any]:
-        """Ejecuta el proceso RPA 2 de descarga de enunciado en UEDI."""
-        return await descargar_material(headless=headless)
+    async def ejecutar_descarga_material(curso: str = None, material: str = None, headless: bool = True) -> Dict[str, Any]:
+        # Ejecuta el proceso RPA 2 de descarga de enunciado en UEDI.
+        kwargs = {"headless": headless}
+        if curso:
+            kwargs["curso"] = curso
+        if material:
+            kwargs["material"] = material
+        return await descargar_material(**kwargs)
 
     @staticmethod
     async def ejecutar_formulario(datos: Dict[str, str] = None, headless: bool = True) -> Dict[str, Any]:
-        """Ejecuta el proceso RPA 3 de llenado de formulario."""
+        # Ejecuta el proceso RPA 3 de llenado de formulario.
         return await completar_formulario(datos=datos, headless=headless)
 
     @classmethod
     async def ejecutar_por_gesto(cls, gesto: str, headless: bool = True) -> Dict[str, Any]:
-        """
-        Despacha automáticamente el proceso según el gesto detectado.
-        """
+        # Despacha automáticamente el proceso según el gesto detectado.
         gesto_norm = gesto.lower()
         if "arriba" in gesto_norm or "indice_arriba" in gesto_norm or "horario" in gesto_norm:
             return await cls.ejecutar_horario(headless=headless)
@@ -77,8 +80,8 @@ class RPAService:
         return asyncio.run(cls.ejecutar_horario())
 
     @classmethod
-    def sync_ejecutar_descarga_material(cls) -> Dict[str, Any]:
-        return asyncio.run(cls.ejecutar_descarga_material())
+    def sync_ejecutar_descarga_material(cls, curso: str = None, material: str = None) -> Dict[str, Any]:
+        return asyncio.run(cls.ejecutar_descarga_material(curso=curso, material=material))
 
     @classmethod
     def sync_ejecutar_formulario(cls) -> Dict[str, Any]:

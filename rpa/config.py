@@ -4,7 +4,7 @@ from dotenv import load_dotenv
 
 # Cargar variables de entorno si existe un archivo .env
 BASE_DIR = Path(__file__).resolve().parent.parent
-load_dotenv(BASE_DIR / ".env")
+load_dotenv(BASE_DIR / ".env", override=True)
 
 # URLs oficiales
 PORTAL_ACADEMICO_URL = os.getenv(
