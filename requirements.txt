@@ -1,9 +1,9 @@
 # ---------------------------------------------------------------
 # Librerías de visión (ya instaladas en el venv de la Raspberry)
 # ---------------------------------------------------------------
-mediapipe==0.10.18
-opencv-python==4.10.0
-numpy==1.26.4
+mediapipe>=0.10.18,<0.11.0
+opencv-python-headless>=4.9.0
+numpy>=1.26.0,<2.0.0
 
 # ---------------------------------------------------------------
 # RPA — Automatización de browser
