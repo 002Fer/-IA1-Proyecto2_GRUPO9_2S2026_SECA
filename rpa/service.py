@@ -61,12 +61,12 @@ class RPAService:
     @classmethod
     async def ejecutar_por_gesto(cls, gesto: str, headless: bool = True) -> Dict[str, Any]:
         # Despacha automáticamente el proceso según el gesto detectado.
-        gesto_norm = gesto.lower()
-        if "arriba" in gesto_norm or "indice_arriba" in gesto_norm or "horario" in gesto_norm:
+        gesto_norm = (gesto or "").upper()
+        if "INDEX_UP" in gesto_norm or "ARRIBA" in gesto_norm or "HORARIO" in gesto_norm:
             return await cls.ejecutar_horario(headless=headless)
-        elif "abajo" in gesto_norm or "indice_abajo" in gesto_norm or "material" in gesto_norm:
+        elif "INDEX_DOWN" in gesto_norm or "ABAJO" in gesto_norm or "MATERIAL" in gesto_norm:
             return await cls.ejecutar_descarga_material(headless=headless)
-        elif "escribir" in gesto_norm or "formulario" in gesto_norm or "escritura" in gesto_norm:
+        elif "WRITE_GESTURE" in gesto_norm or "ESCRIBIR" in gesto_norm or "FORMULARIO" in gesto_norm or "ESCRITURA" in gesto_norm:
             return await cls.ejecutar_formulario(headless=headless)
         else:
             return {

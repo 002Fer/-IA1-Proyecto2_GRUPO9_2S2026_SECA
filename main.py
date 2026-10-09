@@ -245,7 +245,10 @@ def main():
     finally:
         logger.info(f"Frames procesados: {frame_count}")
         detector.release()
-        http_server.shutdown()
+        try:
+            http_server.server_close()
+        except Exception:
+            pass
         logger.info("AURA detenida correctamente.")
 
 
