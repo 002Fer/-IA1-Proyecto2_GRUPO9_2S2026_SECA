@@ -189,7 +189,7 @@ def main():
         sys.exit(1)
 
     logger.info(f"Servidor MJPEG iniciado en http://0.0.0.0:{stream_port}")
-    logger.info("Abre en tu PC: http://<IP_RASPBERRY>:{stream_port}")
+    logger.info(f"Abre en tu PC: http://<IP_RASPBERRY>:{stream_port}")
     http_server = _start_http_server(stream_port)
 
     logger.info("AURA corriendo. Ctrl+C para detener.\n")
