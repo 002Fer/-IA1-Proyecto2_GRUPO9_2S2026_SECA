@@ -4,10 +4,41 @@ import mediapipe as mp
 from mediapipe.tasks import python
 from mediapipe.tasks.python import vision
 
+import zipfile
+import urllib.request
+from pathlib import Path
+
+HAND_MODEL_URL = "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/latest/hand_landmarker.task"
+
+
+def _ensure_valid_model(model_path: str, download_url: str) -> str:
+    path = Path(model_path).resolve()
+    needs_download = False
+
+    if not path.exists() or path.stat().st_size < 10000:
+        needs_download = True
+    else:
+        try:
+            with zipfile.ZipFile(path, "r") as z:
+                if z.testzip() is not None:
+                    needs_download = True
+        except Exception:
+            needs_download = True
+
+    if needs_download:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        print(f"[MediaPipe] Descargando modelo hand_landmarker en {path}...")
+        urllib.request.urlretrieve(download_url, path)
+        print(f"[MediaPipe] Modelo descargado ({path.stat().st_size} bytes).")
+
+    return str(path)
+
+
 class HandLandmarks:
     def __init__(self, model_path="models/hand_landmarker.task"):
+        valid_model_path = _ensure_valid_model(model_path, HAND_MODEL_URL)
         base_options = python.BaseOptions(
-            model_asset_path=model_path
+            model_asset_path=valid_model_path
         )
 
         options = vision.HandLandmarkerOptions(
