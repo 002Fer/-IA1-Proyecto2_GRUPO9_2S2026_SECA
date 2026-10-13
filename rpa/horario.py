@@ -1,10 +1,33 @@
 import os
+import time
 import logging
 from typing import Dict, Any, Optional
 from rpa.config import PORTAL_ACADEMICO_URL, USAC_USER, USAC_PASSWORD
 from rpa.browser import get_browser_session
 
 logger = logging.getLogger("RPA_Horario")
+
+# ---------------------------------------------------------------------------
+# Caché en memoria: evita relanzar Chromium si el resultado ya está disponible.
+# TTL de 1 hora — suficiente para una sesión de demostración.
+# ---------------------------------------------------------------------------
+_CACHE_TTL = 3600  # segundos
+_cache_result: Optional[Dict[str, Any]] = None
+_cache_timestamp: float = 0.0
+
+
+def _get_cached() -> Optional[Dict[str, Any]]:
+    global _cache_result, _cache_timestamp
+    if _cache_result and (time.time() - _cache_timestamp) < _CACHE_TTL:
+        return _cache_result
+    return None
+
+
+def _set_cached(result: Dict[str, Any]) -> None:
+    global _cache_result, _cache_timestamp
+    _cache_result = result
+    _cache_timestamp = time.time()
+
 
 async def consultar_horario(
     user: Optional[str] = None,
@@ -21,7 +44,16 @@ async def consultar_horario(
     3. Selecciona la carrera de Ciencias y Sistemas.
     4. Consulta la sección de cursos asignados y horarios en infoestudiantes.
     5. Extrae el horario real de magistral y laboratorio para el curso especificado.
+
+    El resultado se almacena en caché por 1 hora para que el segundo disparo
+    del gesto sea instantáneo sin relanzar Chromium.
     """
+    # --- Responder desde caché si está disponible ---
+    cached = _get_cached()
+    if cached:
+        logger.info("Horario servido desde caché (sin relanzar navegador).")
+        return cached
+
     username = user or USAC_USER
     pwd = password or USAC_PASSWORD
 
@@ -39,8 +71,8 @@ async def consultar_horario(
                 await page.locator("#username").fill(username, timeout=35000)
                 await page.locator("#password").fill(pwd, timeout=35000)
                 await page.click("#kc-login")
-                
-                # Esperar a que Keycloak procese el login (puede tardar en la Raspberry Pi)
+
+                # Esperar a que Keycloak procese el login
                 try:
                     await page.wait_for_load_state("domcontentloaded", timeout=30000)
                 except Exception:
@@ -84,10 +116,14 @@ async def consultar_horario(
             elif "dashboardacademico" in page.url:
                 logger.info("Usuario autenticado en Dashboard Academico exitosamente.")
 
-            # 4. Navegar a datosPersonales / infoestudiantes con timeout de 150s
+            # 4. Navegar a datosPersonales / infoestudiantes
             logger.info("2. Accediendo a infoestudiantes para consultar asignacion...")
             try:
-                await page.goto("https://infoestudiantes.ingenieria.usac.edu.gt/datosPersonales", timeout=150000, wait_until="commit")
+                await page.goto(
+                    "https://infoestudiantes.ingenieria.usac.edu.gt/datosPersonales",
+                    timeout=150000,
+                    wait_until="commit"
+                )
                 await page.wait_for_load_state("domcontentloaded", timeout=60000)
             except Exception:
                 pass
@@ -106,53 +142,77 @@ async def consultar_horario(
                         pass
                     await page.wait_for_timeout(3000)
 
-            # 5. Configurar periodo y enviar consulta
+            # 5. Configurar periodo y enviar consulta.
+            # CORRECCIÓN: frmHorario.submit() provoca una navegación completa de página.
+            # Envolvemos el evaluate en expect_navigation para que Playwright espere
+            # esa navegación antes de que intentemos parsear el DOM, evitando el error
+            # "Execution context was destroyed, most likely because of a navigation".
             logger.info("3. Consultando horarios de cursos asignados (Segundo Semestre)...")
-            await page.evaluate("""() => {
-                const p = document.getElementById('periodocr') || document.querySelector('select[name="periodocr"]');
-                if (p) p.value = '05'; // Segundo Semestre
-                const y = document.getElementById('aniocr') || document.querySelector('select[name="aniocr"]');
-                if (y && y.options.length > 0) y.value = y.options[0].value;
-                if (typeof viewFormAction === 'function') {
-                    viewFormAction();
-                } else if (document.frmHorario) {
-                    document.frmHorario.action = "/horarioCursosAsignados";
-                    document.frmHorario.submit();
-                }
-            }""")
+            try:
+                async with page.expect_navigation(timeout=30000, wait_until="commit"):
+                    await page.evaluate("""() => {
+                        const p = document.getElementById('periodocr') || document.querySelector('select[name="periodocr"]');
+                        if (p) p.value = '05'; // Segundo Semestre
+                        const y = document.getElementById('aniocr') || document.querySelector('select[name="aniocr"]');
+                        if (y && y.options.length > 0) y.value = y.options[0].value;
+                        if (typeof viewFormAction === 'function') {
+                            viewFormAction();
+                        } else if (document.frmHorario) {
+                            document.frmHorario.action = '/horarioCursosAsignados';
+                            document.frmHorario.submit();
+                        }
+                    }""")
+            except Exception:
+                # Sin navegación (SPA con AJAX) o timeout: continuar de todos modos
+                pass
 
+            # Esperar a que la nueva página esté lista antes de parsear
+            try:
+                await page.wait_for_load_state("domcontentloaded", timeout=20000)
+            except Exception:
+                pass
             await page.wait_for_timeout(4000)
             logger.info(f"Pagina de horarios cargada: {page.url}")
 
-            # 6. Parsear la tabla de horarios de cursos asignados
-            filas_datos = await page.evaluate("""() => {
-                const rows = Array.from(document.querySelectorAll('table tr'));
-                const resultados = [];
-                for (let r of rows) {
-                    const text = r.innerText.trim();
-                    if (text && !text.startsWith('Código') && !text.startsWith('Lu\\tMa')) {
-                        const cols = text.split('\\t').map(c => c.trim());
-                        if (cols.length >= 7) {
-                            resultados.push({
-                                codigo: cols[0],
-                                nombre: cols[1],
-                                seccion: cols[2],
-                                edificio: cols[3],
-                                salon: cols[4],
-                                inicio: cols[5],
-                                fin: cols[6]
-                            });
+            # 6. Parsear la tabla — con reintento automático si el contexto aún no está listo
+            filas_datos = []
+            for intento in range(2):
+                try:
+                    filas_datos = await page.evaluate("""() => {
+                        const rows = Array.from(document.querySelectorAll('table tr'));
+                        const resultados = [];
+                        for (let r of rows) {
+                            const text = r.innerText.trim();
+                            if (text && !text.startsWith('Código') && !text.startsWith('Lu\\tMa')) {
+                                const cols = text.split('\\t').map(c => c.trim());
+                                if (cols.length >= 7) {
+                                    resultados.push({
+                                        codigo: cols[0],
+                                        nombre: cols[1],
+                                        seccion: cols[2],
+                                        edificio: cols[3],
+                                        salon: cols[4],
+                                        inicio: cols[5],
+                                        fin: cols[6]
+                                    });
+                                }
+                            }
                         }
-                    }
-                }
-                return resultados;
-            }""")
+                        return resultados;
+                    }""")
+                    break  # Parseo exitoso, salir del loop
+                except Exception as e_eval:
+                    if intento == 0:
+                        logger.warning(f"Error al parsear tabla (intento {intento+1}): {e_eval}. Esperando 3s...")
+                        await page.wait_for_timeout(3000)
+                    else:
+                        logger.error(f"Error definitivo al parsear tabla: {e_eval}")
 
             logger.info(f"Cursos asignados encontrados en vivo: {len(filas_datos)}")
 
             # 7. Filtrar por el curso solicitado
             ia_filas = [
-                f for f in filas_datos 
+                f for f in filas_datos
                 if curso_busqueda.upper() in f.get("nombre", "").upper()
             ]
 
@@ -165,7 +225,7 @@ async def consultar_horario(
                     "cursos_disponibles": cursos_disponibles
                 }
 
-            # Asignar las sesiones encontradas en la tabla oficial (Fila 1: Magistral, Fila 2: Laboratorio)
+            # Asignar las sesiones encontradas (Fila 1: Magistral, Fila 2: Laboratorio)
             horario_magistral = f"{ia_filas[0]['inicio']} - {ia_filas[0]['fin']}" if len(ia_filas) > 0 else "No asignado"
             horario_lab = f"{ia_filas[1]['inicio']} - {ia_filas[1]['fin']}" if len(ia_filas) > 1 else "No asignado"
 
@@ -187,11 +247,9 @@ async def consultar_horario(
             )
             logger.info(msg)
 
-            return {
-                "success": True,
-                "data": horario_real,
-                "message": msg
-            }
+            result = {"success": True, "data": horario_real, "message": msg}
+            _set_cached(result)   # Guardar en caché para próximas llamadas (1 hora)
+            return result
 
     except Exception as e:
         logger.error(f"Error al consultar horario en vivo: {str(e)}")

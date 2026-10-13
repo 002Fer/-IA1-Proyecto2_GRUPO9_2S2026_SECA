@@ -1,5 +1,6 @@
 import os
 import re
+import time
 import logging
 from pathlib import Path
 from typing import Dict, Any, Optional
@@ -14,6 +15,30 @@ from rpa.config import (
 from rpa.browser import get_browser_session
 
 logger = logging.getLogger("RPA_Material")
+
+# ---------------------------------------------------------------------------
+# Caché en memoria: evita relanzar Chromium si el archivo ya fue descargado.
+# TTL de 1 hora. El resultado incluye la ruta al archivo descargado.
+# ---------------------------------------------------------------------------
+_CACHE_TTL = 3600
+_cache_result: Optional[Dict[str, Any]] = None
+_cache_timestamp: float = 0.0
+
+
+def _get_cached() -> Optional[Dict[str, Any]]:
+    global _cache_result, _cache_timestamp
+    if _cache_result and (time.time() - _cache_timestamp) < _CACHE_TTL:
+        # Verificar que el archivo todavía existe en disco
+        fp = _cache_result.get("file_path")
+        if fp and Path(fp).exists():
+            return _cache_result
+    return None
+
+
+def _set_cached(result: Dict[str, Any]) -> None:
+    global _cache_result, _cache_timestamp
+    _cache_result = result
+    _cache_timestamp = time.time()
 
 def _normalizar(texto: str) -> str:
     # Normaliza texto eliminando acentos, caracteres especiales y espacios extras.
@@ -111,7 +136,16 @@ async def descargar_material(
     - Archivos adjuntos dentro de Tareas (mod/assign).
     - Archivos como Recursos directos (mod/resource o PDFs).
     - Descarga autenticada preservando nombres originales de archivo.
+
+    El resultado se almacena en caché por 1 hora: si el archivo ya existe
+    en disco, la segunda llamada es instantánea.
     """
+    # --- Responder desde caché si el archivo ya fue descargado ---
+    cached = _get_cached()
+    if cached:
+        logger.info("Material servido desde caché (archivo ya descargado).")
+        return cached
+
     # Leer valores actualizados en caliente del .env si no se enviaron explícitamente
     from dotenv import load_dotenv
     from rpa.config import BASE_DIR
@@ -138,7 +172,12 @@ async def descargar_material(
                 await page.locator("#username").fill(username, timeout=25000)
                 await page.locator("#password").fill(pwd, timeout=25000)
                 await page.click("#kc-login, input[type='submit']")
-                await page.wait_for_load_state("domcontentloaded")
+                # CORRECCIÓN: timeout explícito — el default de Playwright es 30 000 ms
+                # y con la cámara corriendo la red USAC lo agotaba.
+                try:
+                    await page.wait_for_load_state("domcontentloaded", timeout=60000)
+                except Exception:
+                    pass
                 await page.wait_for_timeout(3000)
 
             # Función auxiliar para descargar de forma autenticada y extraer el nombre original
@@ -241,11 +280,13 @@ async def descargar_material(
             nombre_archivo = Path(archivo_guardado).name
             logger.info(f"Descarga exitosa: '{nombre_archivo}' ({tam} bytes) guardado en downloads/")
 
-            return {
+            result = {
                 "success": True,
                 "file_path": archivo_guardado,
                 "message": f"Material '{nombre_archivo}' descargado correctamente en downloads/ ({tam} bytes)"
             }
+            _set_cached(result)   # Guardar en caché (1 hora) para próximas llamadas
+            return result
 
     except Exception as e:
         logger.error(f"Error al descargar material de UEDI: {str(e)}")
