@@ -181,8 +181,14 @@ class MockAgentService(AgentService):
     def add_gesture(self, name):
         if not name:
             return False, "El nombre del gesto es obligatorio."
-        if any(g["name"].lower() == name.lower() for g in self.state["gestures"]):
-            return False, "El gesto ya existe."
+        for g in self.state["gestures"]:
+            if g["name"].lower() == name.lower():
+                if not g.get("enabled", True):
+                    g["enabled"] = True
+                    self._log(f"Gesto reactivado: {name}")
+                    self._save()
+                    return True, f"Gesto '{name}' habilitado nuevamente."
+                return False, "El gesto ya existe y está activo."
         self.state["gestures"].append({"name": name, "enabled": True})
         self._log(f"Gesto registrado: {name}")
         self._save()
