@@ -86,7 +86,7 @@ async def consultar_horario(
 
             # 4. Navegar a datosPersonales / infoestudiantes
             logger.info("2. Accediendo a infoestudiantes para consultar asignacion...")
-            await page.goto("https://infoestudiantes.ingenieria.usac.edu.gt/datosPersonales", timeout=35000, wait_until="domcontentloaded")
+            await page.goto("https://infoestudiantes.ingenieria.usac.edu.gt/datosPersonales", timeout=75000, wait_until="domcontentloaded")
             await page.wait_for_timeout(3000)
 
             # Si infoestudiantes pide login SSO de nuevo

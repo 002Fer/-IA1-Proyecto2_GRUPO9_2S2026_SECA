@@ -126,16 +126,11 @@ async def descargar_material(
 
     try:
         async with get_browser_session(headless=headless, block_heavy_resources=True) as (page, context):
-            # 1. Acceder al portal UEDI campus
+            # 1. Acceder directamente a la pantalla de login de UEDI
             logger.info("1. Navegando al campus virtual de UEDI...")
-            await page.goto(UEDI_URL, timeout=60000, wait_until="domcontentloaded")
-
-            # 2. Iniciar sesión si es necesario
-            login_btn = page.locator("a:has-text('Iniciar sesión'), a:has-text('Ingresar')")
-            if await login_btn.count() > 0:
-                logger.info("Redirigiendo a pantalla de autenticación SSO...")
-                await login_btn.first.click()
-                await page.wait_for_load_state("domcontentloaded")
+            login_url = "https://uedi.ingenieria.usac.edu.gt/campus/login/index.php"
+            await page.goto(login_url, timeout=75000, wait_until="domcontentloaded")
+            await page.wait_for_timeout(2000)
 
             # 3. Completar credenciales en Keycloak SSO
             if username and pwd and ("auth.ingenieria.usac.edu.gt" in page.url or await page.locator("#username").count() > 0):
