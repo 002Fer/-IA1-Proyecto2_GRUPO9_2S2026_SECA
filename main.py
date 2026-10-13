@@ -16,6 +16,7 @@ Ctrl+C para detener.
 import os
 import sys
 import time
+import math
 import signal
 import threading
 import logging
@@ -46,8 +47,21 @@ _running = True                            # Flag global de ejecución
 
 
 def _set_frame(frame) -> None:
-    """Codifica el frame BGR a JPEG y lo guarda para el servidor."""
+    """Codifica el frame BGR a JPEG y lo guarda para el servidor.
+
+    Añade un reloj HH:MM:SS en la esquina superior derecha del frame para que
+    el usuario siempre pueda confirmar visualmente que el feed está vivo,
+    incluso cuando la escena parece estática.
+    """
     global _latest_jpeg
+    # Reloj en tiempo real — cambia cada segundo en cualquier estado de AURA
+    ts = time.strftime("%H:%M:%S")
+    h, w = frame.shape[:2]
+    # Sombra negra + texto blanco para legibilidad sobre cualquier fondo
+    cv2.putText(frame, ts, (w - 88, 22),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 0), 2, cv2.LINE_AA)
+    cv2.putText(frame, ts, (w - 89, 21),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1, cv2.LINE_AA)
     ret, buf = cv2.imencode(
         ".jpg", frame,
         [cv2.IMWRITE_JPEG_QUALITY, 75]
@@ -133,6 +147,7 @@ _rpa_state = {
     "status": None,       # "running", "success", "error"
     "message": "",
     "finished_at": 0.0,
+    "started_at": 0.0,    # Timestamp de inicio para el contador visual
 }
 
 
@@ -154,6 +169,7 @@ def _trigger_rpa(gesture: str, agent=None, telegram=None) -> None:
         _rpa_state["current_action"] = rpa_label
         _rpa_state["status"] = "running"
         _rpa_state["message"] = f"Ejecutando {rpa_label}..."
+        _rpa_state["started_at"] = time.monotonic()
 
     def run():
         logger.info(f"[RPA] Iniciando proceso: {rpa_id} ({rpa_label})")
@@ -360,15 +376,42 @@ def main():
                         _rpa_state["status"] = None
                         rpa_status = None
 
-            # OPTIMIZACIÓN CRÍTICA PARA RASPBERRY PI 3A+ (512MB RAM):
-            # Mientras Chromium corre el proceso RPA, pausar la inferencia pesada de MediaPipe
-            # y reducir los FPS de refresco a ~2.5 FPS (time.sleep(0.4)).
+            # OPTIMIZACIÓN PARA RASPBERRY PI 3A+:
+            # Mientras Chromium corre el proceso RPA, pausar MediaPipe para ceder CPU.
+            # Se mantiene la cámara activa a ~5 FPS con un indicador visual animado
+            # para que el usuario sepa que el sistema está funcionando.
             if is_rpa_running:
                 try:
                     frame = detector.camera.read()
                 except RuntimeError as e:
                     logger.error(f"Error de cámara: {e}")
                     break
+
+                # --- Indicador visual animado de RPA en curso ---
+                # Dibujamos directamente sobre el frame con OpenCV antes de enviarlo
+                # al overlay de AuraUI, de modo que el usuario vea claramente que
+                # AURA está trabajando aunque MediaPipe esté pausado.
+                with _rpa_lock:
+                    rpa_started = _rpa_state["started_at"]
+                elapsed_s = int(time.monotonic() - rpa_started)
+                now_t = time.monotonic()
+
+                # Punto verde pulsante: radio oscila entre 6 y 14 px con una onda senoidal
+                pulse_r = int(6 + 8 * abs(math.sin(now_t * 2.5)))
+                h_f, w_f = frame.shape[:2]
+                dot_x, dot_y = 28, h_f - 28
+                # Sombra negra para que se vea sobre fondos claros u oscuros
+                cv2.circle(frame, (dot_x, dot_y), pulse_r + 3, (0, 0, 0), -1)
+                cv2.circle(frame, (dot_x, dot_y), pulse_r, (0, 210, 0), -1)
+
+                # Texto de estado con tiempo transcurrido
+                label = f"RPA en curso  {elapsed_s}s"
+                text_x = dot_x + pulse_r + 8
+                text_y = h_f - 20
+                cv2.putText(frame, label, (text_x + 1, text_y + 1),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 0, 0), 2, cv2.LINE_AA)
+                cv2.putText(frame, label, (text_x, text_y),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 220, 0), 1, cv2.LINE_AA)
 
                 result = {
                     "frame": frame,
@@ -386,8 +429,9 @@ def main():
                 ui_action = rpa_action
                 ui_interp = "RPA en curso"
 
-                # Pausa de 400ms para ceder la CPU por completo a Chromium
-                time.sleep(0.4)
+                # 200ms: 5 FPS — el usuario ve el feed actualizado sin quitar
+                # demasiada CPU a Chromium que está corriendo en paralelo.
+                time.sleep(0.2)
 
             else:
                 try:

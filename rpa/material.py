@@ -205,8 +205,11 @@ async def descargar_material(
             target_course_url, nombre_curso_match = _buscar_mejor_curso(course_links, target_curso)
             if target_course_url:
                 logger.info(f"Curso encontrado: '{nombre_curso_match}' -> {target_course_url}")
-                await page.goto(target_course_url)
-                await page.wait_for_load_state("domcontentloaded")
+                await page.goto(target_course_url, timeout=75000, wait_until="commit")
+                try:
+                    await page.wait_for_load_state("domcontentloaded", timeout=30000)
+                except Exception:
+                    pass
                 await page.wait_for_timeout(2000)
 
             # 5. Localizar la actividad solicitada
@@ -250,8 +253,13 @@ async def descargar_material(
             # Caso B: Tarea
             elif "/mod/assign/" in act_url:
                 logger.info("Tipo detectado: Tarea (mod/assign). Ingresando a la tarea para localizar el enunciado adjunto...")
-                await page.goto(act_url)
-                await page.wait_for_load_state("domcontentloaded")
+                # CORRECCIÓN: timeout explícito — el default de 30 000 ms se agotaba
+                # con la red USAC lenta cuando la cámara corre en paralelo.
+                await page.goto(act_url, timeout=75000, wait_until="commit")
+                try:
+                    await page.wait_for_load_state("domcontentloaded", timeout=30000)
+                except Exception:
+                    pass
                 await page.wait_for_timeout(2000)
 
                 # Localizar archivos adjuntos en el área principal de la tarea
