@@ -31,13 +31,13 @@ async def consultar_horario(
         async with get_browser_session(headless=headless, block_heavy_resources=True) as (page, _):
             # 1. Ingresar al dashboard academico
             logger.info("1. Navegando al Dashboard Academico...")
-            await page.goto(PORTAL_ACADEMICO_URL, timeout=35000, wait_until="domcontentloaded")
+            await page.goto(PORTAL_ACADEMICO_URL, timeout=60000, wait_until="domcontentloaded")
 
             # 2. Autenticacion en Keycloak SSO si es requerida
             if "auth.ingenieria.usac.edu.gt" in page.url or await page.locator("#username").count() > 0:
                 logger.info(f"Autenticando en Keycloak para usuario: {username}...")
-                await page.fill("#username", username)
-                await page.fill("#password", pwd)
+                await page.locator("#username").fill(username, timeout=25000)
+                await page.locator("#password").fill(pwd, timeout=25000)
                 await page.click("#kc-login")
                 
                 # Esperar a que Keycloak procese el login (puede tardar en la Raspberry Pi)

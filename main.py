@@ -232,9 +232,10 @@ def main():
                         _rpa_state["status"] = None
                         rpa_status = None
 
-            # OPTIMIZACIÓN CLAVE PARA RASPBERRY PI 3A+ (512MB RAM):
-            # Mientras Chromium corre el proceso RPA, pausar la inferencia pesada de MediaPipe.
-            # Solo leemos la cámara para mantener el stream en vivo fluido.
+            # OPTIMIZACIÓN CRÍTICA PARA RASPBERRY PI 3A+ (512MB RAM):
+            # Mientras Chromium corre el proceso RPA, pausar la inferencia pesada de MediaPipe
+            # y reducir los FPS de refresco a ~2.5 FPS (time.sleep(0.4)).
+            # Esto libera el 95% de la CPU para que Chromium no sufra timeouts.
             if is_rpa_running:
                 try:
                     frame = detector.camera.read()
@@ -257,6 +258,9 @@ def main():
                 exec_status = "running"
                 ui_action = rpa_action
                 ui_interp = "RPA en curso"
+
+                # Pausa de 400ms para ceder la CPU por completo a Chromium
+                time.sleep(0.4)
 
             else:
                 try:

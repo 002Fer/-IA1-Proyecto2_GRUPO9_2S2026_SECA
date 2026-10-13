@@ -6,7 +6,7 @@ from playwright.async_api import async_playwright, Browser, BrowserContext, Page
 async def get_browser_session(headless: bool = True, block_heavy_resources: bool = True):
     # Si en Raspberry Pi se usa un chromium del sistema, puede especificarse aquí
     system_chromium = os.getenv("CHROMIUM_EXECUTABLE_PATH", None)
-    # Se configuran los argumentos del navegador
+    # Se configuran los argumentos del navegador optimizados para Raspberry Pi (512MB RAM)
     launch_args = [
         "--no-sandbox",
         "--disable-setuid-sandbox",
@@ -15,6 +15,9 @@ async def get_browser_session(headless: bool = True, block_heavy_resources: bool
         "--disable-extensions",
         "--no-first-run",
         "--no-default-browser-check",
+        "--disable-background-networking",
+        "--disable-renderer-backgrounding",
+        "--js-flags=--max-old-space-size=128",
     ]
 
     async with async_playwright() as p:
