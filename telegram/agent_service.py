@@ -106,13 +106,32 @@ class MockAgentService(AgentService):
                 {"name": "señalar_izquierda", "enabled": True},
                 {"name": "señalar_derecha", "enabled": True},
                 {"name": "brazos_cruzados", "enabled": True},
+                {"name": "indice_arriba", "enabled": True},
+                {"name": "indice_abajo", "enabled": True},
+                {"name": "escritura", "enabled": True},
             ],
             "actions": [
                 {"name": "saludar", "description": "Responder al usuario"},
                 {"name": "confirmar", "description": "Confirmar una interacción"},
                 {"name": "rechazar", "description": "Responder a un rechazo"},
+                {"name": "mostrar_izquierda", "description": "Mostrar opción izquierda"},
+                {"name": "mostrar_derecha", "description": "Mostrar opción derecha"},
+                {"name": "ejecutar_accion", "description": "Comando de acción general"},
+                {"name": "consultar_horario", "description": "RPA: Consultar horario en portal FIUSAC"},
+                {"name": "descargar_material", "description": "RPA: Descargar material de UEDI"},
+                {"name": "completar_formulario", "description": "RPA: Llenar formulario de auxiliares"},
             ],
-            "links": {},
+            "links": {
+                "indice_arriba": "consultar_horario",
+                "indice_abajo": "descargar_material",
+                "escritura": "completar_formulario",
+                "mano_levantada": "saludar",
+                "pulgar_arriba": "confirmar",
+                "pulgar_abajo": "rechazar",
+                "señalar_izquierda": "mostrar_izquierda",
+                "señalar_derecha": "mostrar_derecha",
+                "brazos_cruzados": "ejecutar_accion",
+            },
             "messages": {},
             "history": [],
             "logs": [],
@@ -221,7 +240,23 @@ class MockAgentService(AgentService):
     def get_logs(self, limit=10):
         return self.state.get("logs", [])[:limit]
 
+    def is_gesture_enabled(self, gesture):
+        for g in self.state.get("gestures", []):
+            if g["name"].lower() == gesture.lower():
+                return g.get("enabled", True)
+        return True
+
+    def set_last_chat_id(self, chat_id):
+        self.state["last_chat_id"] = str(chat_id)
+        self._save()
+
+    def get_last_chat_id(self):
+        return self.state.get("last_chat_id")
+
     def execute_gesture(self, gesture, confidence=0):
+        if not self.is_gesture_enabled(gesture):
+            return {"enabled": False, "action": None, "message": None, "event": None}
+
         action = self.state.get("links", {}).get(gesture)
         message = self.state.get("messages", {}).get(gesture)
         event = {
@@ -234,7 +269,7 @@ class MockAgentService(AgentService):
         self.state["history"] = self.state["history"][:100]
         self._log(f"Gesto detectado: {gesture}; acción: {action or 'sin_accion'}")
         self._save()
-        return {"action": action, "message": message, "event": event}
+        return {"enabled": True, "action": action, "message": message, "event": event}
 
 
 class RaspberryAgentService(MockAgentService):

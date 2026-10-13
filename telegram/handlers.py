@@ -21,6 +21,11 @@ class TelegramHandlers:
         text = (message.get("text") or "").strip()
         if not text:
             return
+
+        self.last_chat_id = chat_id
+        if hasattr(self.agent, "set_last_chat_id"):
+            self.agent.set_last_chat_id(chat_id)
+
         if self.allowed_chat_id and chat_id != self.allowed_chat_id:
             self.telegram.send_message(chat_id, "⛔ Chat no autorizado.")
             return

@@ -13,11 +13,13 @@ de Realidad Aumentada y el robot virtual 2D de AURA.
 Ctrl+C para detener.
 """
 
+import os
 import sys
 import time
 import signal
 import threading
 import logging
+from pathlib import Path
 from http.server import HTTPServer, BaseHTTPRequestHandler
 
 import cv2
@@ -112,6 +114,18 @@ RPA_GESTURES = {
     "WRITE_GESTURE": ("formulario", "Completando formulario"),
 }
 
+GESTURE_TO_AGENT = {
+    "HAND_RAISED":   "mano_levantada",
+    "THUMBS_UP":     "pulgar_arriba",
+    "THUMBS_DOWN":   "pulgar_abajo",
+    "POINT_LEFT":    "señalar_izquierda",
+    "POINT_RIGHT":   "señalar_derecha",
+    "ARMS_CROSSED":  "brazos_cruzados",
+    "INDEX_UP":      "indice_arriba",
+    "INDEX_DOWN":    "indice_abajo",
+    "WRITE_GESTURE": "escritura",
+}
+
 _rpa_lock = threading.Lock()
 _rpa_state = {
     "running": False,
@@ -122,7 +136,7 @@ _rpa_state = {
 }
 
 
-def _trigger_rpa(gesture: str) -> None:
+def _trigger_rpa(gesture: str, agent=None, telegram=None) -> None:
     """Ejecuta el proceso RPA correspondiente de forma segura y exclusiva."""
     import asyncio
     from rpa.service import RPAService
@@ -160,7 +174,66 @@ def _trigger_rpa(gesture: str) -> None:
 
         logger.info(f"[RPA] {rpa_id} → {status}: {msg}")
 
+        # Notificar al Bot de Telegram si está activo
+        if agent:
+            agent._log(f"RPA {rpa_id} finalizado ({status}): {msg}")
+            chat_id = agent.get_last_chat_id()
+            if chat_id and telegram:
+                emoji = "✅" if status == "success" else "❌"
+                try:
+                    telegram.send_message(
+                        chat_id,
+                        f"🤖 [AURA RPA] {emoji} Proceso '{rpa_label}' finalizado.\nResultado: {msg}"
+                    )
+                except Exception:
+                    pass
+
     threading.Thread(target=run, daemon=True).start()
+
+
+def _init_telegram(runtime_adapter):
+    """Inicializa el bot de Telegram en segundo plano si hay token configurado."""
+    try:
+        from telegram.bot import load_env, build_agent
+        from telegram.telegram_service import TelegramService
+        from telegram.handlers import TelegramHandlers
+        from telegram.commands import TELEGRAM_MENU_COMMANDS
+
+        load_env()
+        token = os.getenv("AURA_BOT_TOKEN", "").strip()
+        if not token or token == "PEGAR_TOKEN_AQUI":
+            logger.info("[Telegram] No se encontró AURA_BOT_TOKEN válido en telegram/.env. Bot desactivado.")
+            return None, None
+
+        agent = build_agent()
+        agent.set_runtime_adapter(runtime_adapter)
+
+        poll_timeout = int(os.getenv("AURA_POLL_TIMEOUT", "25"))
+        allowed_chat_id = os.getenv("AURA_ALLOWED_CHAT_ID", "").strip()
+
+        telegram_srv = TelegramService(token, poll_timeout=poll_timeout)
+        handlers = TelegramHandlers(telegram_srv, agent, allowed_chat_id=allowed_chat_id)
+
+        commands = [
+            {"command": name, "description": desc}
+            for name, desc in TELEGRAM_MENU_COMMANDS.items()
+        ]
+        telegram_srv.set_my_commands(commands)
+
+        def run_bot():
+            logger.info("[Telegram] Bot conectado e iniciando polling de comandos...")
+            try:
+                telegram_srv.run_polling(handlers.handle_message)
+            except Exception as ex:
+                logger.error(f"[Telegram] Error en loop del bot: {ex}")
+
+        thread = threading.Thread(target=run_bot, daemon=True)
+        thread.start()
+        logger.info("[Telegram] Bot activo en segundo plano.")
+        return agent, telegram_srv
+    except Exception as e:
+        logger.error(f"[Telegram] Error al inicializar bot: {e}")
+        return None, None
 
 
 # ---------------------------------------------------------------------------
@@ -191,6 +264,34 @@ def main():
     )
     aura_ui = AuraUI()
 
+    # Estado de interacción controlado desde Telegram (/iniciar y /apagar)
+    _recognition_active = True
+
+    class RuntimeAdapter:
+        def get_status(self):
+            from telegram.agent_service import RaspberryAgentService
+            return {
+                "cpu": RaspberryAgentService._linux_cpu_percent(),
+                "ram": RaspberryAgentService._linux_ram_percent(),
+                "status": "RUNNING" if _recognition_active else "PAUSED",
+                "recognition": "ACTIVE" if _recognition_active else "INACTIVE",
+            }
+
+        def start(self):
+            nonlocal _recognition_active
+            _recognition_active = True
+            logger.info("[Telegram] Comando /iniciar recibido: Reconocimiento activado.")
+            return True
+
+        def stop(self):
+            nonlocal _recognition_active
+            _recognition_active = False
+            logger.info("[Telegram] Comando /apagar recibido: Reconocimiento pausado.")
+            return True
+
+    adapter = RuntimeAdapter()
+    agent, telegram_srv = _init_telegram(adapter)
+
     # Manejador de Ctrl+C
     def _shutdown(sig, frame):
         global _running
@@ -219,6 +320,33 @@ def main():
 
     try:
         while _running:
+            # Control por Telegram: Si se envió /apagar, pausar MediaPipe y dejar AURA en reposo
+            if not _recognition_active:
+                try:
+                    frame = detector.camera.read()
+                except RuntimeError as e:
+                    logger.error(f"Error de cámara: {e}")
+                    break
+
+                result = {
+                    "frame": frame,
+                    "person_detected": False,
+                    "gesture": "UNKNOWN",
+                    "confidence": 0.0,
+                    "proximity": "UNKNOWN",
+                    "hand_results": None,
+                    "pose_results": None,
+                }
+                ui_result = aura_ui.process(
+                    vision_result=result,
+                    execution_status=None,
+                    interpretation="AURA en reposo",
+                    action="Usa /iniciar en Telegram",
+                )
+                _set_frame(ui_result["frame"])
+                time.sleep(0.1)
+                continue
+
             with _rpa_lock:
                 is_rpa_running = _rpa_state["running"]
                 rpa_status = _rpa_state["status"]
@@ -235,7 +363,6 @@ def main():
             # OPTIMIZACIÓN CRÍTICA PARA RASPBERRY PI 3A+ (512MB RAM):
             # Mientras Chromium corre el proceso RPA, pausar la inferencia pesada de MediaPipe
             # y reducir los FPS de refresco a ~2.5 FPS (time.sleep(0.4)).
-            # Esto libera el 95% de la CPU para que Chromium no sufra timeouts.
             if is_rpa_running:
                 try:
                     frame = detector.camera.read()
@@ -273,9 +400,27 @@ def main():
                 person = result.get("person_detected", False)
                 confidence = result.get("confidence", 0.0)
 
+                # Verificar si el gesto está habilitado en Telegram
+                agent_gesture = GESTURE_TO_AGENT.get(gesture)
+                if agent and agent_gesture:
+                    if not agent.is_gesture_enabled(agent_gesture):
+                        gesture = "UNKNOWN"
+
+                # Registrar en Telegram el gesto cuando es detectado por primera vez
+                if gesture != "UNKNOWN" and gesture != last_gesture and agent:
+                    exec_res = agent.execute_gesture(agent_gesture or gesture, confidence)
+                    # Si tiene mensaje configurado con /sendMessage, notificar al chat
+                    if exec_res.get("message") and telegram_srv:
+                        chat_id = agent.get_last_chat_id()
+                        if chat_id:
+                            try:
+                                telegram_srv.send_message(chat_id, f"💬 [AURA]: {exec_res['message']}")
+                            except Exception:
+                                pass
+
                 # Disparar RPA si corresponde y no hay otro corriendo
                 if gesture in RPA_GESTURES and rpa_status is None:
-                    _trigger_rpa(gesture)
+                    _trigger_rpa(gesture, agent=agent, telegram=telegram_srv)
 
                 exec_status = rpa_status
                 ui_action = rpa_action if rpa_status else None
