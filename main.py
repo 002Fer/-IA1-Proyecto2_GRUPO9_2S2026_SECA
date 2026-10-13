@@ -104,42 +104,61 @@ def _start_http_server(port: int = 8080) -> HTTPServer:
 
 
 # ---------------------------------------------------------------------------
-# Gestos que disparan un proceso RPA
+# Gestos que disparan un proceso RPA y sincronización de estado
 # ---------------------------------------------------------------------------
 RPA_GESTURES = {
-    "INDEX_UP":      "horario",
-    "INDEX_DOWN":    "material",
-    "WRITE_GESTURE": "formulario",
+    "INDEX_UP":      ("horario", "Consultando horario"),
+    "INDEX_DOWN":    ("material", "Descargando material UEDI"),
+    "WRITE_GESTURE": ("formulario", "Completando formulario"),
 }
 
-# Tiempo mínimo entre dos ejecuciones del mismo RPA (segundos)
-RPA_COOLDOWN = 15.0
-_last_rpa_time: dict = {}
 _rpa_lock = threading.Lock()
+_rpa_state = {
+    "running": False,
+    "current_action": "",
+    "status": None,       # "running", "success", "error"
+    "message": "",
+    "finished_at": 0.0,
+}
 
 
-def _trigger_rpa(gesture: str, aura_ui: AuraUI) -> None:
-    """Ejecuta el proceso RPA correspondiente en un hilo aparte."""
+def _trigger_rpa(gesture: str) -> None:
+    """Ejecuta el proceso RPA correspondiente de forma segura y exclusiva."""
     import asyncio
     from rpa.service import RPAService
 
-    proceso = RPA_GESTURES.get(gesture)
-    if proceso is None:
+    if gesture not in RPA_GESTURES:
         return
 
-    now = time.monotonic()
+    rpa_id, rpa_label = RPA_GESTURES[gesture]
+
     with _rpa_lock:
-        last = _last_rpa_time.get(proceso, 0.0)
-        if now - last < RPA_COOLDOWN:
-            return
-        _last_rpa_time[proceso] = now
+        if _rpa_state["running"]:
+            return  # Ya hay un RPA en ejecución, no saturar la Raspberry Pi
+
+        _rpa_state["running"] = True
+        _rpa_state["current_action"] = rpa_label
+        _rpa_state["status"] = "running"
+        _rpa_state["message"] = f"Ejecutando {rpa_label}..."
 
     def run():
-        logger.info(f"[RPA] Iniciando proceso: {proceso}")
-        result = asyncio.run(RPAService.ejecutar_por_gesto(gesture))
-        status = "success" if result.get("success") else "error"
-        msg = result.get("message", "")
-        logger.info(f"[RPA] {proceso} → {status}: {msg}")
+        logger.info(f"[RPA] Iniciando proceso: {rpa_id} ({rpa_label})")
+        try:
+            result = asyncio.run(RPAService.ejecutar_por_gesto(gesture))
+            success = result.get("success", False)
+            msg = result.get("message", "")
+            status = "success" if success else "error"
+        except Exception as e:
+            status = "error"
+            msg = f"Error inesperado: {str(e)}"
+
+        with _rpa_lock:
+            _rpa_state["running"] = False
+            _rpa_state["status"] = status
+            _rpa_state["message"] = msg[:38]  # Truncar para que quepa en el panel AR
+            _rpa_state["finished_at"] = time.monotonic()
+
+        logger.info(f"[RPA] {rpa_id} → {status}: {msg}")
 
     threading.Thread(target=run, daemon=True).start()
 
@@ -200,27 +219,70 @@ def main():
 
     try:
         while _running:
-            try:
-                result = detector.process()
-            except RuntimeError as e:
-                logger.error(f"Error de cámara: {e}")
-                break
+            with _rpa_lock:
+                is_rpa_running = _rpa_state["running"]
+                rpa_status = _rpa_state["status"]
+                rpa_action = _rpa_state["message"] or _rpa_state["current_action"]
+                finished_at = _rpa_state["finished_at"]
 
-            gesture = result.get("gesture", "UNKNOWN")
-            person = result.get("person_detected", False)
-            confidence = result.get("confidence", 0.0)
+            # Si terminó un RPA hace menos de 5 segundos, mantener el estado visual de Exito/Error
+            if not is_rpa_running and rpa_status in ("success", "error"):
+                if time.monotonic() - finished_at > 5.0:
+                    with _rpa_lock:
+                        _rpa_state["status"] = None
+                        rpa_status = None
 
-            # Disparar RPA si corresponde
-            if gesture in RPA_GESTURES:
-                _trigger_rpa(gesture, aura_ui)
-                execution_status = None  # El hilo RPA maneja su propio estado
+            # OPTIMIZACIÓN CLAVE PARA RASPBERRY PI 3A+ (512MB RAM):
+            # Mientras Chromium corre el proceso RPA, pausar la inferencia pesada de MediaPipe.
+            # Solo leemos la cámara para mantener el stream en vivo fluido.
+            if is_rpa_running:
+                try:
+                    frame = detector.camera.read()
+                except RuntimeError as e:
+                    logger.error(f"Error de cámara: {e}")
+                    break
+
+                result = {
+                    "frame": frame,
+                    "person_detected": True,
+                    "gesture": "UNKNOWN",
+                    "confidence": 0.0,
+                    "proximity": "NEAR",
+                    "hand_results": None,
+                    "pose_results": None,
+                }
+                gesture = "UNKNOWN"
+                person = True
+                confidence = 0.0
+                exec_status = "running"
+                ui_action = rpa_action
+                ui_interp = "RPA en curso"
+
             else:
-                execution_status = None
+                try:
+                    result = detector.process()
+                except RuntimeError as e:
+                    logger.error(f"Error de cámara: {e}")
+                    break
 
-            # Actualizar UI
+                gesture = result.get("gesture", "UNKNOWN")
+                person = result.get("person_detected", False)
+                confidence = result.get("confidence", 0.0)
+
+                # Disparar RPA si corresponde y no hay otro corriendo
+                if gesture in RPA_GESTURES and rpa_status is None:
+                    _trigger_rpa(gesture)
+
+                exec_status = rpa_status
+                ui_action = rpa_action if rpa_status else None
+                ui_interp = "Accion completada" if rpa_status == "success" else None
+
+            # Actualizar UI y superponer Realidad Aumentada + Robot 2D
             ui_result = aura_ui.process(
                 vision_result=result,
-                execution_status=execution_status,
+                execution_status=exec_status,
+                interpretation=ui_interp,
+                action=ui_action,
             )
 
             # Publicar frame al stream HTTP
