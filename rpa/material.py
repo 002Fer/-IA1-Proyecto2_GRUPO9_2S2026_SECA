@@ -10,6 +10,7 @@ from rpa.config import (
     USAC_PASSWORD,
     DOWNLOAD_DIR,
     CURSO_OBJETIVO,
+    SECCION_TEMA,
     MATERIAL_OBJETIVO
 )
 from rpa.browser import get_browser_session
@@ -193,38 +194,101 @@ async def descargar_material(
                 destino.write_bytes(await resp.body())
                 return str(destino), destino.stat().st_size
 
-            # 4. Navegar al curso objetivo
-            logger.info(f"2. Buscando curso '{target_curso}'...")
-            course_links = await page.locator("a[href*='course/view.php']").evaluate_all("""
-                els => els.map(e => ({
-                    text: (e.textContent || '').trim().replace(/\\s+/g, ' '),
-                    href: e.href
-                }))
-            """)
+            # ---------------------------------------------------------------
+            # 4. Navegar DIRECTAMENTE al curso por URL conocida.
+            #    Esto es más rápido y robusto que buscar el curso en el dashboard.
+            # ---------------------------------------------------------------
+            from rpa.config import UEDI_COURSE_URL
+            course_url = os.getenv("UEDI_COURSE_URL", UEDI_COURSE_URL)
+            logger.info(f"2. Navegando directo al curso: {course_url}")
+            await page.goto(course_url, timeout=75000, wait_until="commit")
+            try:
+                await page.wait_for_load_state("domcontentloaded", timeout=30000)
+            except Exception:
+                pass
+            await page.wait_for_timeout(2000)
 
-            target_course_url, nombre_curso_match = _buscar_mejor_curso(course_links, target_curso)
-            if target_course_url:
-                logger.info(f"Curso encontrado: '{nombre_curso_match}' -> {target_course_url}")
-                await page.goto(target_course_url, timeout=75000, wait_until="commit")
+            # ---------------------------------------------------------------
+            # 5. Encontrar la sección "Proyectos" en el formato card de Moodle.
+            #    Las secciones se renderizan como tarjetas con links que contienen
+            #    "section=" en la URL o como li.section con un encabezado visible.
+            # ---------------------------------------------------------------
+            target_seccion = os.getenv("SECCION_TEMA", SECCION_TEMA)
+            logger.info(f"3. Buscando sección '{target_seccion}' en el curso...")
+
+            seccion_url = await page.evaluate("""
+                (seccion) => {
+                    const q = seccion.toLowerCase().trim();
+
+                    // Formato card de Moodle: cada tarjeta es un <a> o contiene un <a>
+                    // con el nombre de la sección en el texto o en un atributo aria-label / title.
+                    const candidatos = Array.from(document.querySelectorAll(
+                        'a[href*="section="], .card a, .section-card a, ' +
+                        '.course-section-header a, li.section > a, ' +
+                        'a.aalink, .activity-title a'
+                    ));
+
+                    for (const a of candidatos) {
+                        const txt = (
+                            a.textContent ||
+                            a.getAttribute('aria-label') ||
+                            a.getAttribute('title') || ''
+                        ).toLowerCase().trim();
+                        if (txt === q || txt.startsWith(q)) {
+                            return a.href;
+                        }
+                    }
+
+                    // Fallback: buscar cualquier elemento visible con ese texto
+                    const todo = Array.from(document.querySelectorAll('a'));
+                    for (const a of todo) {
+                        const txt = (a.textContent || '').trim().toLowerCase();
+                        if (txt === q) return a.href;
+                    }
+
+                    return null;
+                }
+            """, target_seccion)
+
+            if seccion_url:
+                logger.info(f"   Sección '{target_seccion}' → {seccion_url}")
+                await page.goto(seccion_url, timeout=75000, wait_until="commit")
                 try:
                     await page.wait_for_load_state("domcontentloaded", timeout=30000)
                 except Exception:
                     pass
                 await page.wait_for_timeout(2000)
+            else:
+                logger.warning(
+                    f"   Sección '{target_seccion}' no encontrada como card. "
+                    "Buscando en la página completa del curso..."
+                )
 
-            # 5. Localizar la actividad solicitada
-            logger.info(f"3. Buscando actividad para material '{target_material}'...")
-            actividades = await page.locator("a[href*='/mod/'], a[href*='pluginfile.php']").evaluate_all("""
-                els => els.map(e => ({
-                    text: (e.textContent || e.getAttribute('aria-label') || '').trim().replace(/\\s+/g, ' '),
-                    href: e.href
-                })).filter(e => e.text.length > 0)
+            # 6. Localizar la actividad dentro de la sección actual (ya navegamos a "Proyectos").
+            #    Si no encontramos la sección, la búsqueda se hace sobre toda la página del curso.
+            logger.info(f"4. Buscando actividad '{target_material}' en la página actual...")
+
+            actividades = await page.evaluate("""
+                () => {
+                    return Array.from(document.querySelectorAll('a[href*="/mod/"], a[href*="pluginfile.php"]'))
+                        .map(e => ({
+                            text: (e.textContent || e.getAttribute('aria-label') || '').trim().replace(/\\s+/g, ' '),
+                            href: e.href,
+                            inTargetSection: true
+                        }))
+                        .filter(e => e.text.length > 0);
+                }
             """)
 
+            logger.info(f"   Actividades encontradas en la página: {len(actividades)}")
+
             # Puntuación y selección de la mejor actividad
+            # Las actividades de la sección objetivo reciben un bonus de puntuación.
             candidatos_puntuados = []
             for act in actividades:
                 score = _calcular_coincidencia(act['text'], target_material)
+                if act.get("inTargetSection"):
+                    score += 100   # Bonus por estar en la sección correcta
                 if score > 0:
                     candidatos_puntuados.append((score, act))
 
