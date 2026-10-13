@@ -39,13 +39,35 @@ async def consultar_horario(
                 await page.fill("#username", username)
                 await page.fill("#password", pwd)
                 await page.click("#kc-login")
-                await page.wait_for_load_state("domcontentloaded")
-                await page.wait_for_timeout(3000)
+                
+                # Esperar a que Keycloak procese el login (puede tardar en la Raspberry Pi)
+                try:
+                    await page.wait_for_load_state("domcontentloaded", timeout=15000)
+                except Exception:
+                    pass
 
-            # 3. Seleccionar carrera solo si existe carreras simultáneas, si tiene una sola carrera este paso no aparece
+                # Verificar si Keycloak arrojó un error de credenciales
+                error_locators = page.locator(".alert-error, #input-error, .kc-feedback-text, span.kc-error")
+                if await error_locators.count() > 0:
+                    error_texto = (await error_locators.first.inner_text()).strip()
+                    logger.error(f"Error devuelto por Keycloak: {error_texto}")
+                    return {
+                        "success": False,
+                        "data": None,
+                        "message": f"Error de autenticación en portal USAC: {error_texto}. Revisa USAC_USER y USAC_PASSWORD en tu .env"
+                    }
+
+                # Esperar hasta que se complete la redirección fuera de Keycloak
+                for _ in range(10):
+                    if "auth.ingenieria.usac.edu.gt" not in page.url:
+                        break
+                    await page.wait_for_timeout(1000)
+
+                logger.info(f"URL tras autenticacion: {page.url}")
+
+            # 3. Seleccionar carrera solo si existe carreras simultáneas
             if "carrera" in page.url:
                 logger.info("Pantalla de seleccion de carrera detectada (carreras simultaneas)...")
-                # Priorizar Sistemas si está disponible, o tomar la carrera activa
                 sistemas_link = page.locator("a[href*='carrera=09'], a:has-text('CIENCIAS Y SISTEMAS')")
                 if await sistemas_link.count() > 0:
                     await sistemas_link.first.click()
@@ -54,15 +76,31 @@ async def consultar_horario(
                     if await primera_opcion.count() > 0:
                         await primera_opcion.first.click()
 
-                await page.wait_for_load_state("domcontentloaded")
+                try:
+                    await page.wait_for_load_state("domcontentloaded", timeout=10000)
+                except Exception:
+                    pass
                 await page.wait_for_timeout(2000)
-            else:
-                logger.info("Usuario con carrera única: se omite selección de carrera.")
+            elif "dashboardacademico" in page.url:
+                logger.info("Usuario autenticado en Dashboard Academico exitosamente.")
 
-            # 4. Navegar a datosPersonales
+            # 4. Navegar a datosPersonales / infoestudiantes
             logger.info("2. Accediendo a infoestudiantes para consultar asignacion...")
-            await page.goto("https://infoestudiantes.ingenieria.usac.edu.gt/datosPersonales", timeout=30000, wait_until="domcontentloaded")
-            await page.wait_for_timeout(2000)
+            await page.goto("https://infoestudiantes.ingenieria.usac.edu.gt/datosPersonales", timeout=35000, wait_until="domcontentloaded")
+            await page.wait_for_timeout(3000)
+
+            # Si infoestudiantes pide login SSO de nuevo
+            if "auth.ingenieria.usac.edu.gt" in page.url or await page.locator("#username").count() > 0:
+                logger.info("Infoestudiantes requiere autenticacion SSO secundaria...")
+                if await page.locator("#username").count() > 0:
+                    await page.fill("#username", username)
+                    await page.fill("#password", pwd)
+                    await page.click("#kc-login")
+                    try:
+                        await page.wait_for_load_state("domcontentloaded", timeout=15000)
+                    except Exception:
+                        pass
+                    await page.wait_for_timeout(3000)
 
             # 5. Configurar periodo y enviar consulta
             logger.info("3. Consultando horarios de cursos asignados (Segundo Semestre)...")
