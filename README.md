@@ -693,7 +693,8 @@ Sección A · Facultad de Ingeniería · USAC
 
 | Módulo | Responsable |
 |---|---|
-| Orquestador + Visión + Cámara | Persona 1 |
-| Robot 2D + Realidad Aumentada | Persona 2 |
-| RPA — Automatización web | Persona 3 |
-| Bot de Telegram | Persona 4 |
+|Juntar y hacer pruebas| Persona 1|
+| Orquestador + Visión + Cámara | Persona 2 |
+| Robot 2D + Realidad Aumentada | Persona 3|
+| RPA — Automatización web | Persona 4|
+| Bot de Telegram | Persona 5 |
