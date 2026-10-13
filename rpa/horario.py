@@ -31,18 +31,18 @@ async def consultar_horario(
         async with get_browser_session(headless=headless, block_heavy_resources=True) as (page, _):
             # 1. Ingresar al dashboard academico
             logger.info("1. Navegando al Dashboard Academico...")
-            await page.goto(PORTAL_ACADEMICO_URL, timeout=60000, wait_until="domcontentloaded")
+            await page.goto(PORTAL_ACADEMICO_URL, timeout=150000, wait_until="domcontentloaded")
 
             # 2. Autenticacion en Keycloak SSO si es requerida
             if "auth.ingenieria.usac.edu.gt" in page.url or await page.locator("#username").count() > 0:
                 logger.info(f"Autenticando en Keycloak para usuario: {username}...")
-                await page.locator("#username").fill(username, timeout=25000)
-                await page.locator("#password").fill(pwd, timeout=25000)
+                await page.locator("#username").fill(username, timeout=35000)
+                await page.locator("#password").fill(pwd, timeout=35000)
                 await page.click("#kc-login")
                 
                 # Esperar a que Keycloak procese el login (puede tardar en la Raspberry Pi)
                 try:
-                    await page.wait_for_load_state("domcontentloaded", timeout=15000)
+                    await page.wait_for_load_state("domcontentloaded", timeout=30000)
                 except Exception:
                     pass
 
@@ -58,7 +58,7 @@ async def consultar_horario(
                     }
 
                 # Esperar hasta que se complete la redirección fuera de Keycloak
-                for _ in range(10):
+                for _ in range(15):
                     if "auth.ingenieria.usac.edu.gt" not in page.url:
                         break
                     await page.wait_for_timeout(1000)
@@ -77,16 +77,20 @@ async def consultar_horario(
                         await primera_opcion.first.click()
 
                 try:
-                    await page.wait_for_load_state("domcontentloaded", timeout=10000)
+                    await page.wait_for_load_state("domcontentloaded", timeout=15000)
                 except Exception:
                     pass
                 await page.wait_for_timeout(2000)
             elif "dashboardacademico" in page.url:
                 logger.info("Usuario autenticado en Dashboard Academico exitosamente.")
 
-            # 4. Navegar a datosPersonales / infoestudiantes
+            # 4. Navegar a datosPersonales / infoestudiantes con timeout de 150s
             logger.info("2. Accediendo a infoestudiantes para consultar asignacion...")
-            await page.goto("https://infoestudiantes.ingenieria.usac.edu.gt/datosPersonales", timeout=75000, wait_until="domcontentloaded")
+            try:
+                await page.goto("https://infoestudiantes.ingenieria.usac.edu.gt/datosPersonales", timeout=150000, wait_until="commit")
+                await page.wait_for_load_state("domcontentloaded", timeout=60000)
+            except Exception:
+                pass
             await page.wait_for_timeout(3000)
 
             # Si infoestudiantes pide login SSO de nuevo
