@@ -9,6 +9,13 @@ if sys.platform == "win32":
     except Exception:
         pass
 
+from pathlib import Path
+
+# Agregar la raíz del proyecto a sys.path para permitir ejecución directa
+BASE_DIR = Path(__file__).resolve().parent.parent
+if str(BASE_DIR) not in sys.path:
+    sys.path.insert(0, str(BASE_DIR))
+
 from rpa.service import RPAService
 import logging
 
