@@ -89,11 +89,11 @@ async def consultar_horario(
                         "message": f"Error de autenticación en portal USAC: {error_texto}. Revisa USAC_USER y USAC_PASSWORD en tu .env"
                     }
 
-                # Esperar hasta que se complete la redirección fuera de Keycloak
-                for _ in range(15):
-                    if "auth.ingenieria.usac.edu.gt" not in page.url:
-                        break
-                    await page.wait_for_timeout(1000)
+                # Esperar inmediatamente a que se complete la redirección fuera de Keycloak
+                try:
+                    await page.wait_for_url(lambda u: "auth.ingenieria.usac.edu.gt" not in u, timeout=20000)
+                except Exception:
+                    pass
 
                 logger.info(f"URL tras autenticacion: {page.url}")
 
@@ -109,10 +109,9 @@ async def consultar_horario(
                         await primera_opcion.first.click()
 
                 try:
-                    await page.wait_for_load_state("domcontentloaded", timeout=15000)
+                    await page.wait_for_load_state("domcontentloaded", timeout=10000)
                 except Exception:
                     pass
-                await page.wait_for_timeout(2000)
             elif "dashboardacademico" in page.url:
                 logger.info("Usuario autenticado en Dashboard Academico exitosamente.")
 
@@ -121,13 +120,11 @@ async def consultar_horario(
             try:
                 await page.goto(
                     "https://infoestudiantes.ingenieria.usac.edu.gt/datosPersonales",
-                    timeout=150000,
-                    wait_until="commit"
+                    timeout=45000,
+                    wait_until="domcontentloaded"
                 )
-                await page.wait_for_load_state("domcontentloaded", timeout=60000)
             except Exception:
                 pass
-            await page.wait_for_timeout(3000)
 
             # Si infoestudiantes pide login SSO de nuevo
             if "auth.ingenieria.usac.edu.gt" in page.url or await page.locator("#username").count() > 0:
@@ -137,19 +134,14 @@ async def consultar_horario(
                     await page.fill("#password", pwd)
                     await page.click("#kc-login")
                     try:
-                        await page.wait_for_load_state("domcontentloaded", timeout=15000)
+                        await page.wait_for_load_state("domcontentloaded", timeout=10000)
                     except Exception:
                         pass
-                    await page.wait_for_timeout(3000)
 
-            # 5. Configurar periodo y enviar consulta.
-            # CORRECCIÓN: frmHorario.submit() provoca una navegación completa de página.
-            # Envolvemos el evaluate en expect_navigation para que Playwright espere
-            # esa navegación antes de que intentemos parsear el DOM, evitando el error
-            # "Execution context was destroyed, most likely because of a navigation".
+            # 5. Configurar periodo y enviar consulta (Segundo Semestre)
             logger.info("3. Consultando horarios de cursos asignados (Segundo Semestre)...")
             try:
-                async with page.expect_navigation(timeout=30000, wait_until="commit"):
+                async with page.expect_navigation(timeout=20000, wait_until="commit"):
                     await page.evaluate("""() => {
                         const p = document.getElementById('periodocr') || document.querySelector('select[name="periodocr"]');
                         if (p) p.value = '05'; // Segundo Semestre
@@ -163,15 +155,13 @@ async def consultar_horario(
                         }
                     }""")
             except Exception:
-                # Sin navegación (SPA con AJAX) o timeout: continuar de todos modos
                 pass
 
-            # Esperar a que la nueva página esté lista antes de parsear
+            # Esperar reactivamente a que la tabla aparezca en el DOM (sin esperas ciegas)
             try:
-                await page.wait_for_load_state("domcontentloaded", timeout=20000)
+                await page.wait_for_selector("table tr", timeout=12000)
             except Exception:
                 pass
-            await page.wait_for_timeout(4000)
             logger.info(f"Pagina de horarios cargada: {page.url}")
 
             # 6. Parsear la tabla — con reintento automático si el contexto aún no está listo

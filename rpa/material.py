@@ -164,22 +164,18 @@ async def descargar_material(
             # 1. Acceder directamente a la pantalla de login de UEDI
             logger.info("1. Navegando al campus virtual de UEDI...")
             login_url = "https://uedi.ingenieria.usac.edu.gt/campus/login/index.php"
-            await page.goto(login_url, timeout=75000, wait_until="domcontentloaded")
-            await page.wait_for_timeout(2000)
+            await page.goto(login_url, timeout=45000, wait_until="domcontentloaded")
 
-            # 3. Completar credenciales en Keycloak SSO
+            # 3. Completar credenciales en Keycloak SSO si es necesario
             if username and pwd and ("auth.ingenieria.usac.edu.gt" in page.url or await page.locator("#username").count() > 0):
                 logger.info(f"Ingresando credenciales de Keycloak para usuario: {username}...")
                 await page.locator("#username").fill(username, timeout=25000)
                 await page.locator("#password").fill(pwd, timeout=25000)
                 await page.click("#kc-login, input[type='submit']")
-                # CORRECCIÓN: timeout explícito — el default de Playwright es 30 000 ms
-                # y con la cámara corriendo la red USAC lo agotaba.
                 try:
-                    await page.wait_for_load_state("domcontentloaded", timeout=60000)
+                    await page.wait_for_url(lambda u: "auth.ingenieria.usac.edu.gt" not in u, timeout=25000)
                 except Exception:
                     pass
-                await page.wait_for_timeout(3000)
 
             # Función auxiliar para descargar de forma autenticada y extraer el nombre original
             async def guardar_desde_url(url_descarga: str, nombre_default: str):
@@ -196,17 +192,11 @@ async def descargar_material(
 
             # ---------------------------------------------------------------
             # 4. Navegar DIRECTAMENTE al curso por URL conocida.
-            #    Esto es más rápido y robusto que buscar el curso en el dashboard.
             # ---------------------------------------------------------------
             from rpa.config import UEDI_COURSE_URL
             course_url = os.getenv("UEDI_COURSE_URL", UEDI_COURSE_URL)
             logger.info(f"2. Navegando directo al curso: {course_url}")
-            await page.goto(course_url, timeout=75000, wait_until="commit")
-            try:
-                await page.wait_for_load_state("domcontentloaded", timeout=30000)
-            except Exception:
-                pass
-            await page.wait_for_timeout(2000)
+            await page.goto(course_url, timeout=45000, wait_until="domcontentloaded")
 
             # ---------------------------------------------------------------
             # 5. Encontrar la sección "Proyectos" en el formato card de Moodle.
@@ -252,12 +242,7 @@ async def descargar_material(
 
             if seccion_url:
                 logger.info(f"   Sección '{target_seccion}' → {seccion_url}")
-                await page.goto(seccion_url, timeout=75000, wait_until="commit")
-                try:
-                    await page.wait_for_load_state("domcontentloaded", timeout=30000)
-                except Exception:
-                    pass
-                await page.wait_for_timeout(2000)
+                await page.goto(seccion_url, timeout=45000, wait_until="domcontentloaded")
             else:
                 logger.warning(
                     f"   Sección '{target_seccion}' no encontrada como card. "
@@ -317,14 +302,7 @@ async def descargar_material(
             # Caso B: Tarea
             elif "/mod/assign/" in act_url:
                 logger.info("Tipo detectado: Tarea (mod/assign). Ingresando a la tarea para localizar el enunciado adjunto...")
-                # CORRECCIÓN: timeout explícito — el default de 30 000 ms se agotaba
-                # con la red USAC lenta cuando la cámara corre en paralelo.
-                await page.goto(act_url, timeout=75000, wait_until="commit")
-                try:
-                    await page.wait_for_load_state("domcontentloaded", timeout=30000)
-                except Exception:
-                    pass
-                await page.wait_for_timeout(2000)
+                await page.goto(act_url, timeout=45000, wait_until="domcontentloaded")
 
                 # Localizar archivos adjuntos en el área principal de la tarea
                 adjuntos = await page.locator("#region-main a[href*='pluginfile.php'], #intro a, .introattachment a").evaluate_all("""
