@@ -7,6 +7,7 @@ from rpa.config import (
     BASE_DIR,
     FORMULARIO_URL,
     USAC_USER,
+    ESTUDIANTE_CARNET,
     ESTUDIANTE_NOMBRE,
     ESTUDIANTE_CORREO,
     GRUPO_NUMERO,
@@ -48,7 +49,7 @@ async def completar_formulario(
     # Armar datos por defecto combinados con datos personalizados si se enviaron
     user_carnet = os.getenv("USAC_USER", USAC_USER)
     datos_finales = {
-        "carnet": user_carnet,
+        "carnet": os.getenv("ESTUDIANTE_CARNET", ESTUDIANTE_CARNET),
         "nombre": os.getenv("ESTUDIANTE_NOMBRE", ESTUDIANTE_NOMBRE),
         "correo": os.getenv("ESTUDIANTE_CORREO", ESTUDIANTE_CORREO or f"{user_carnet}@ingenieria.usac.edu.gt"),
         "grupo": os.getenv("GRUPO_NUMERO", GRUPO_NUMERO),

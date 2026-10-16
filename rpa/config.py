@@ -41,6 +41,7 @@ MATERIAL_OBJETIVO = os.getenv("MATERIAL_OBJETIVO", "Proyecto #2")
 
 # Formulario institucional / auxiliares (RPA 3)
 FORMULARIO_URL = os.getenv("FORMULARIO_URL", "")
+ESTUDIANTE_CARNET = os.getenv("ESTUDIANTE_CARNET", "555545124")
 ESTUDIANTE_NOMBRE = os.getenv("ESTUDIANTE_NOMBRE", "Daniel")
 ESTUDIANTE_CORREO = os.getenv("ESTUDIANTE_CORREO", f"{USAC_USER}@ingenieria.usac.edu.gt" if USAC_USER else "")
 GRUPO_NUMERO = os.getenv("GRUPO_NUMERO", "Grupo 9")
