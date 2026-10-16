@@ -78,13 +78,22 @@ async def completar_formulario(
         async with get_browser_session(headless=headless, block_heavy_resources=True) as (page, _):
             # 1. Navegar al formulario
             logger.info("1. Cargando formulario de Google Forms...")
-            await page.goto(target_url, timeout=45000, wait_until="domcontentloaded")
-            await page.wait_for_selector("div[role='listitem']", timeout=25000)
+            await page.goto(target_url, timeout=60000, wait_until="domcontentloaded")
 
-            # 2. Localizar preguntas
-            items = page.locator("div[role='listitem']")
+            # 2. Localizar preguntas (esperar que estén adjuntas al DOM con margen térmico)
+            logger.info("2. Esperando que el formulario se renderice en el DOM...")
+            items = page.locator("div[role='listitem'], div.Qr7Oae")
+            try:
+                await items.first.wait_for(state="attached", timeout=60000)
+            except Exception:
+                # Fallback: esperar a cualquier input o form si div[role='listitem'] demora
+                await page.locator("form, input[type='text']").first.wait_for(state="attached", timeout=30000)
+
+            # Pequeña pausa para estabilizar hidratación de scripts de Google
+            await page.wait_for_timeout(1000)
+
             total_items = await items.count()
-            logger.info(f"2. Formulario cargado. Total de preguntas encontradas: {total_items}")
+            logger.info(f"   Formulario cargado. Total de preguntas encontradas: {total_items}")
 
             campos_llenados = 0
 
@@ -183,6 +192,8 @@ async def completar_formulario(
                 "div[role='button']:has-text('Enviar'), "
                 "span:has-text('Enviar'), "
                 "div[role='button']:has-text('Submit'), "
+                "div[role='button'][aria-label='Submit'], "
+                "div[role='button'][aria-label='Enviar'], "
                 "button[type='submit']"
             ).first
 
@@ -204,7 +215,7 @@ async def completar_formulario(
                 "div:has-text('Your response has been recorded')"
             )
             try:
-                await confirm_loc.first.wait_for(timeout=15000)
+                await confirm_loc.first.wait_for(timeout=25000)
                 confirm_msg = "Se registró tu respuesta exitosamente."
             except Exception:
                 # Si la URL cambió a formResponse, también confirma envío exitoso
