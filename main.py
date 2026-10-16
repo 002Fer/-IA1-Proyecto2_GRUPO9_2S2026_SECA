@@ -24,6 +24,7 @@ from pathlib import Path
 from http.server import HTTPServer, BaseHTTPRequestHandler
 
 import cv2
+import numpy as np
 
 from vision.detector import VisionDetector
 from ui import AuraUI
@@ -333,6 +334,8 @@ def main():
     last_gesture = "UNKNOWN"
     last_state_label = ""
     frame_count = 0
+    _camera_paused_for_rpa = False
+    _last_captured_frame = None
 
     try:
         while _running:
@@ -376,45 +379,52 @@ def main():
                         _rpa_state["status"] = None
                         rpa_status = None
 
-            # OPTIMIZACIÓN PARA RASPBERRY PI 3A+:
-            # Mientras Chromium corre el proceso RPA, pausar MediaPipe para ceder CPU.
-            # Se mantiene la cámara activa a ~5 FPS con un indicador visual animado
-            # para que el usuario sepa que el sistema está funcionando.
+            # ---------------------------------------------------------------
+            # CONTROL TÉRMICO Y DE RECURSOS PARA RASPBERRY PI 3A+:
+            # Mientras Chromium ejecuta el RPA, apagamos completamente la cámara
+            # (liberando el proceso rpicam-vid, la GPU y la memoria de video).
+            # El stream HTTP muestra una pantalla informativa con el robot 'EXECUTING'.
+            # Al terminar el RPA, la cámara se reactiva automáticamente.
+            # ---------------------------------------------------------------
             if is_rpa_running:
-                try:
-                    frame = detector.camera.read()
-                except RuntimeError as e:
-                    logger.error(f"Error de cámara: {e}")
-                    break
+                if not _camera_paused_for_rpa:
+                    logger.info("[RPA] Apagando cámara rpicam-vid temporalmente para enfriar CPU y maximizar RAM para Chromium...")
+                    try:
+                        detector.camera.release()
+                    except Exception as ex_cam:
+                        logger.warning(f"Aviso al liberar cámara: {ex_cam}")
+                    _camera_paused_for_rpa = True
 
-                # --- Indicador visual animado de RPA en curso ---
-                # Dibujamos directamente sobre el frame con OpenCV antes de enviarlo
-                # al overlay de AuraUI, de modo que el usuario vea claramente que
-                # AURA está trabajando aunque MediaPipe esté pausado.
                 with _rpa_lock:
                     rpa_started = _rpa_state["started_at"]
                 elapsed_s = int(time.monotonic() - rpa_started)
-                now_t = time.monotonic()
 
-                # Punto verde pulsante: radio oscila entre 6 y 14 px con una onda senoidal
-                pulse_r = int(6 + 8 * abs(math.sin(now_t * 2.5)))
-                h_f, w_f = frame.shape[:2]
-                dot_x, dot_y = 28, h_f - 28
-                # Sombra negra para que se vea sobre fondos claros u oscuros
-                cv2.circle(frame, (dot_x, dot_y), pulse_r + 3, (0, 0, 0), -1)
-                cv2.circle(frame, (dot_x, dot_y), pulse_r, (0, 210, 0), -1)
+                # Usar el último frame o crear un canvas neutro si no existe
+                if _last_captured_frame is not None:
+                    display_frame = _last_captured_frame.copy()
+                    # Aplicar leve oscurecimiento para enfocar la atención en el estado
+                    overlay_dim = np.zeros_like(display_frame)
+                    cv2.addWeighted(display_frame, 0.45, overlay_dim, 0.55, 0, display_frame)
+                else:
+                    display_frame = np.zeros((480, 640, 3), dtype=np.uint8)
 
-                # Texto de estado con tiempo transcurrido
-                label = f"RPA en curso  {elapsed_s}s"
-                text_x = dot_x + pulse_r + 8
-                text_y = h_f - 20
-                cv2.putText(frame, label, (text_x + 1, text_y + 1),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 0, 0), 2, cv2.LINE_AA)
-                cv2.putText(frame, label, (text_x, text_y),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 220, 0), 1, cv2.LINE_AA)
+                h_f, w_f = display_frame.shape[:2]
 
+                # Banner central de RPA en ejecución
+                cv2.rectangle(display_frame, (30, h_f // 2 - 45), (w_f - 30, h_f // 2 + 45), (20, 20, 20), -1)
+                cv2.rectangle(display_frame, (30, h_f // 2 - 45), (w_f - 30, h_f // 2 + 45), (0, 180, 255), 2)
+
+                txt_action = f"EJECUTANDO: {rpa_action.upper()}"
+                cv2.putText(display_frame, txt_action[:40], (50, h_f // 2 - 12),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.65, (255, 255, 255), 2, cv2.LINE_AA)
+
+                txt_sub = f"Tiempo: {elapsed_s}s | Camara en reposo termico para maxima velocidad"
+                cv2.putText(display_frame, txt_sub, (50, h_f // 2 + 22),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 220, 255), 1, cv2.LINE_AA)
+
+                # Construir percepción sintética para que AuraUI dibuje el robot en estado EXECUTING
                 result = {
-                    "frame": frame,
+                    "frame": display_frame,
                     "person_detected": True,
                     "gesture": "UNKNOWN",
                     "confidence": 0.0,
@@ -429,17 +439,28 @@ def main():
                 ui_action = rpa_action
                 ui_interp = "RPA en curso"
 
-                # 200ms: 5 FPS — el usuario ve el feed actualizado sin quitar
-                # demasiada CPU a Chromium que está corriendo en paralelo.
-                time.sleep(0.2)
+                # Dormimos 1 segundo completo: CPU para visión = 0%
+                time.sleep(1.0)
 
             else:
+                # Si el RPA acaba de terminar y la cámara estaba apagada, reactivarla
+                if _camera_paused_for_rpa:
+                    logger.info("[RPA] RPA finalizado. Reactivando cámara rpicam-vid...")
+                    try:
+                        detector.camera.open()
+                    except Exception as ex_open:
+                        logger.error(f"Error al reactivar la cámara: {ex_open}")
+                    _camera_paused_for_rpa = False
+                    # Pequeña pausa para estabilizar el sensor tras encender
+                    time.sleep(0.5)
+
                 try:
                     result = detector.process()
                 except RuntimeError as e:
                     logger.error(f"Error de cámara: {e}")
                     break
 
+                _last_captured_frame = result["frame"].copy()
                 gesture = result.get("gesture", "UNKNOWN")
                 person = result.get("person_detected", False)
                 confidence = result.get("confidence", 0.0)
