@@ -39,5 +39,11 @@ SECCION_OBJETIVO = os.getenv("SECCION_OBJETIVO", "Sección A")
 SECCION_TEMA = os.getenv("SECCION_TEMA", "Proyectos")
 MATERIAL_OBJETIVO = os.getenv("MATERIAL_OBJETIVO", "Proyecto #2")
 
-# Formulario 
+# Formulario institucional / auxiliares (RPA 3)
 FORMULARIO_URL = os.getenv("FORMULARIO_URL", "")
+ESTUDIANTE_NOMBRE = os.getenv("ESTUDIANTE_NOMBRE", "Daniel")
+ESTUDIANTE_CORREO = os.getenv("ESTUDIANTE_CORREO", f"{USAC_USER}@ingenieria.usac.edu.gt" if USAC_USER else "")
+GRUPO_NUMERO = os.getenv("GRUPO_NUMERO", "Grupo 9")
+SECCION_LAB = os.getenv("SECCION_LAB", "A")
+REPO_GITHUB = os.getenv("REPO_GITHUB", "https://github.com/002Fer/-IA1-Proyecto2_GRUPO9_2S2026_SECA")
+ESTADO_AGENTE_DEFAULT = os.getenv("ESTADO_AGENTE", "Agente AURA activo. Gesto de escritura detectado. Llenado y validacion de formulario completados con exito.")
