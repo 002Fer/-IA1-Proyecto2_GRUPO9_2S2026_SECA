@@ -221,20 +221,52 @@ async def descargar_material(
 
             if nav_direct_ok:
                 logger.info(f"3. Localizando enunciado adjunto en la tarea...")
-                adjuntos = await page.locator("#region-main a[href*='pluginfile.php'], #intro a, .introattachment a").evaluate_all("""
-                    els => els.map(e => ({
-                        text: (e.textContent || '').trim().replace(/\\s+/g, ' '),
-                        href: e.href
-                    })).filter(e => e.href.includes('introattachment') || e.href.includes('pluginfile.php') || e.text.endsWith('.pdf'))
+                
+                # Esperamos brevemente a que el DOM de la tarea renderice los enlaces de archivos
+                try:
+                    await page.wait_for_selector("a[href*='pluginfile.php'], a[href*='.pdf']", timeout=15000)
+                except Exception:
+                    await page.wait_for_timeout(3000)
+
+                # Buscamos de forma global en toda la página cualquier enlace que sea un archivo descargable
+                adjuntos = await page.evaluate("""
+                    () => {
+                        const links = Array.from(document.querySelectorAll('a'));
+                        const res = [];
+                        for (const a of links) {
+                            const href = (a.href || '').toLowerCase();
+                            const text = (a.textContent || '').trim();
+                            const textLower = text.toLowerCase();
+                            
+                            const esPluginFile = href.includes('pluginfile.php');
+                            const esPdfHref = href.endsWith('.pdf') || href.includes('.pdf?');
+                            const esPdfTexto = textLower.endsWith('.pdf') || textLower.includes('.pdf');
+                            const esProyecto = textLower.includes('proyecto') || textLower.includes('enunciado');
+
+                            if (esPluginFile || esPdfHref || esPdfTexto) {
+                                res.push({
+                                    text: text.replace(/\\s+/g, ' '),
+                                    href: a.href,
+                                    priority: (esPdfTexto || esProyecto) ? 2 : 1
+                                });
+                            }
+                        }
+                        // Priorizar los que claramente dicen .pdf o Proyecto en el texto
+                        res.sort((a, b) => b.priority - a.priority);
+                        return res;
+                    }
                 """)
+
+                logger.info(f"   Enlaces de archivos encontrados en la tarea: {len(adjuntos)}")
 
                 if adjuntos:
                     adjunto = adjuntos[0]
-                    sug_name = adjunto['text'] if adjunto['text'].endswith('.pdf') else f"{target_material}.pdf"
-                    logger.info(f"Descargando enunciado adjunto de la tarea: '{sug_name}'...")
+                    sug_name = adjunto['text'] if adjunto['text'].lower().endswith('.pdf') else f"{target_material}.pdf"
+                    logger.info(f"Descargando enunciado adjunto de la tarea: '{sug_name}' ({adjunto['href']})...")
                     archivo_guardado, tam = await guardar_desde_url(adjunto['href'], sug_name)
                 else:
-                    logger.warning("No se encontró archivo adjunto en la descripción directa de la tarea.")
+                    logger.warning("No se encontró ningún archivo adjunto en la página de la tarea.")
+
 
             if not archivo_guardado:
                 return {
