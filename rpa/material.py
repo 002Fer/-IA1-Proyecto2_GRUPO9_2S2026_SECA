@@ -195,138 +195,32 @@ async def descargar_material(
                 return str(destino), destino.stat().st_size
 
             # ---------------------------------------------------------------
-            # 4. Navegar DIRECTAMENTE al curso por URL conocida.
-            #    Esto es más rápido y robusto que buscar el curso en el dashboard.
+            # 4. Navegar DIRECTAMENTE a la tarea del Proyecto #2
+            #    (Evita tener que lidiar con modales y tarjetas dinámicas de Moodle)
             # ---------------------------------------------------------------
-            from rpa.config import UEDI_COURSE_URL
-            course_url = os.getenv("UEDI_COURSE_URL", UEDI_COURSE_URL)
-            logger.info(f"2. Navegando directo al curso: {course_url}")
-            await page.goto(course_url, timeout=75000, wait_until="commit")
+            from rpa.config import UEDI_PROJECT_URL
+            project_url = os.getenv("UEDI_PROJECT_URL", UEDI_PROJECT_URL)
+            logger.info(f"2. Navegando directo a la actividad/tarea: {project_url}")
+            
+            nav_direct_ok = False
             try:
-                await page.wait_for_load_state("domcontentloaded", timeout=30000)
-            except Exception:
-                pass
-            await page.wait_for_timeout(2000)
-
-            # ---------------------------------------------------------------
-            # 5. Encontrar la sección "Proyectos" en el formato card de Moodle.
-            #    Las secciones se renderizan como tarjetas con links que contienen
-            #    "section=" en la URL o como li.section con un encabezado visible.
-            # ---------------------------------------------------------------
-            target_seccion = os.getenv("SECCION_TEMA", SECCION_TEMA)
-            logger.info(f"3. Buscando sección '{target_seccion}' en el curso...")
-
-            seccion_url = await page.evaluate("""
-                (seccion) => {
-                    const q = seccion.toLowerCase().trim();
-
-                    // Formato card de Moodle: cada tarjeta es un <a> o contiene un <a>
-                    // con el nombre de la sección en el texto o en un atributo aria-label / title.
-                    const candidatos = Array.from(document.querySelectorAll(
-                        'a[href*="section="], .card a, .section-card a, ' +
-                        '.course-section-header a, li.section > a, ' +
-                        'a.aalink, .activity-title a'
-                    ));
-
-                    for (const a of candidatos) {
-                        const txt = (
-                            a.textContent ||
-                            a.getAttribute('aria-label') ||
-                            a.getAttribute('title') || ''
-                        ).toLowerCase().trim();
-                        if (txt === q || txt.startsWith(q)) {
-                            return a.href;
-                        }
-                    }
-
-                    // Fallback: buscar cualquier elemento visible con ese texto
-                    const todo = Array.from(document.querySelectorAll('a'));
-                    for (const a of todo) {
-                        const txt = (a.textContent || '').trim().toLowerCase();
-                        if (txt === q) return a.href;
-                    }
-
-                    return null;
-                }
-            """, target_seccion)
-
-            if seccion_url:
-                logger.info(f"   Sección '{target_seccion}' → {seccion_url}")
-                await page.goto(seccion_url, timeout=75000, wait_until="commit")
+                await page.goto(project_url, timeout=75000, wait_until="commit")
                 try:
                     await page.wait_for_load_state("domcontentloaded", timeout=30000)
                 except Exception:
                     pass
-                await page.wait_for_timeout(2000)
-            else:
-                logger.warning(
-                    f"   Sección '{target_seccion}' no encontrada como card. "
-                    "Buscando en la página completa del curso..."
-                )
+                nav_direct_ok = True
+            except Exception as e_nav:
+                logger.warning(f"Navegación directa falló ({e_nav}), intentando vía curso...")
 
-            # 6. Localizar la actividad dentro de la sección actual (ya navegamos a "Proyectos").
-            #    Si no encontramos la sección, la búsqueda se hace sobre toda la página del curso.
-            logger.info(f"4. Buscando actividad '{target_material}' en la página actual...")
-
-            actividades = await page.evaluate("""
-                () => {
-                    return Array.from(document.querySelectorAll('a[href*="/mod/"], a[href*="pluginfile.php"]'))
-                        .map(e => ({
-                            text: (e.textContent || e.getAttribute('aria-label') || '').trim().replace(/\\s+/g, ' '),
-                            href: e.href,
-                            inTargetSection: true
-                        }))
-                        .filter(e => e.text.length > 0);
-                }
-            """)
-
-            logger.info(f"   Actividades encontradas en la página: {len(actividades)}")
-
-            # Puntuación y selección de la mejor actividad
-            # Las actividades de la sección objetivo reciben un bonus de puntuación.
-            candidatos_puntuados = []
-            for act in actividades:
-                score = _calcular_coincidencia(act['text'], target_material)
-                if act.get("inTargetSection"):
-                    score += 100   # Bonus por estar en la sección correcta
-                if score > 0:
-                    candidatos_puntuados.append((score, act))
-
-            candidatos_puntuados.sort(key=lambda x: x[0], reverse=True)
-
-            if not candidatos_puntuados:
-                return {
-                    "success": False,
-                    "file_path": None,
-                    "message": f"No se encontró la actividad o recurso '{target_material}' en el curso de UEDI."
-                }
-
-            actividad_elegida = candidatos_puntuados[0][1]
-            act_url = actividad_elegida['href']
-            logger.info(f"Actividad seleccionada: '{actividad_elegida['text']}' ({act_url})")
-
+            # ---------------------------------------------------------------
+            # 5. Localizar y descargar el enunciado adjunto de la tarea
+            # ---------------------------------------------------------------
             archivo_guardado = None
             tam = 0
 
-            # 6. Procesar según el tipo de actividad en Moodle
-            # Caso A: Recurso directo
-            if "/mod/resource/" in act_url or any(ext in act_url.lower() for ext in [".pdf", ".zip", "forcedownload=1"]):
-                logger.info("Tipo detectado: Recurso directo (mod/resource). Descargando archivo directamente...")
-                archivo_guardado, tam = await guardar_desde_url(act_url, f"{target_material}.pdf")
-
-            # Caso B: Tarea
-            elif "/mod/assign/" in act_url:
-                logger.info("Tipo detectado: Tarea (mod/assign). Ingresando a la tarea para localizar el enunciado adjunto...")
-                # CORRECCIÓN: timeout explícito — el default de 30 000 ms se agotaba
-                # con la red USAC lenta cuando la cámara corre en paralelo.
-                await page.goto(act_url, timeout=75000, wait_until="commit")
-                try:
-                    await page.wait_for_load_state("domcontentloaded", timeout=30000)
-                except Exception:
-                    pass
-                await page.wait_for_timeout(2000)
-
-                # Localizar archivos adjuntos en el área principal de la tarea
+            if nav_direct_ok:
+                logger.info(f"3. Localizando enunciado adjunto en la tarea...")
                 adjuntos = await page.locator("#region-main a[href*='pluginfile.php'], #intro a, .introattachment a").evaluate_all("""
                     els => els.map(e => ({
                         text: (e.textContent || '').trim().replace(/\\s+/g, ' '),
@@ -340,7 +234,7 @@ async def descargar_material(
                     logger.info(f"Descargando enunciado adjunto de la tarea: '{sug_name}'...")
                     archivo_guardado, tam = await guardar_desde_url(adjunto['href'], sug_name)
                 else:
-                    logger.warning("No se encontró archivo adjunto en la descripción de la tarea.")
+                    logger.warning("No se encontró archivo adjunto en la descripción directa de la tarea.")
 
             if not archivo_guardado:
                 return {
@@ -359,6 +253,7 @@ async def descargar_material(
             }
             _set_cached(result)   # Guardar en caché (1 hora) para próximas llamadas
             return result
+
 
     except Exception as e:
         logger.error(f"Error al descargar material de UEDI: {str(e)}")

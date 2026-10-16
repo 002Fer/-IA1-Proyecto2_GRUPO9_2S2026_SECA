@@ -24,6 +24,11 @@ UEDI_COURSE_URL = os.getenv(
     "UEDI_COURSE_URL",
     "https://uedi.ingenieria.usac.edu.gt/campus/course/view.php?id=7055"
 )
+# URL directa a la tarea del Proyecto #2 (enlace oficial en campus UEDI)
+UEDI_PROJECT_URL = os.getenv(
+    "UEDI_PROJECT_URL",
+    "https://uedi.ingenieria.usac.edu.gt/campus/mod/assign/view.php?id=441288"
+)
 
 # Credenciales de acceso configuradas en .env
 USAC_USER = os.getenv("USAC_USER", "")
