@@ -43,8 +43,15 @@ MATERIAL_OBJETIVO = os.getenv("MATERIAL_OBJETIVO", "Proyecto #2")
 FORMULARIO_URL = os.getenv("FORMULARIO_URL", "")
 ESTUDIANTE_CARNET = os.getenv("ESTUDIANTE_CARNET", "555545124")
 ESTUDIANTE_NOMBRE = os.getenv("ESTUDIANTE_NOMBRE", "Daniel")
+INTEGRANTES_GRUPO = os.getenv(
+    "INTEGRANTES_GRUPO",
+    "MARCO FERNANDO CRUZ MENDOZA, CRISTOFHER ANTONIO SAQUILMER RODAS, DANIEL ESTUARDO SALVATIERRA MACAJOLA, FERNANDO MISAEL MORALES ORTIZ, ERICK NOE GÓMEZ LÓPEZ"
+)
 ESTUDIANTE_CORREO = os.getenv("ESTUDIANTE_CORREO", f"{USAC_USER}@ingenieria.usac.edu.gt" if USAC_USER else "")
 GRUPO_NUMERO = os.getenv("GRUPO_NUMERO", "Grupo 9")
 SECCION_LAB = os.getenv("SECCION_LAB", "A")
+MODULO_EVALUADO = os.getenv("MODULO_EVALUADO", "3")
+PROCESO_RPA_NOMBRE = os.getenv("PROCESO_RPA_NOMBRE", "RPA 3: Completar formulario institucional")
+AUTOMATIZACION_CORRECTA = os.getenv("AUTOMATIZACION_CORRECTA", "si")
 REPO_GITHUB = os.getenv("REPO_GITHUB", "https://github.com/002Fer/-IA1-Proyecto2_GRUPO9_2S2026_SECA")
 ESTADO_AGENTE_DEFAULT = os.getenv("ESTADO_AGENTE", "Agente AURA activo. Gesto de escritura detectado. Llenado y validacion de formulario completados con exito.")

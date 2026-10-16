@@ -1,6 +1,7 @@
 import os
 import re
 import logging
+from datetime import datetime
 from typing import Dict, Any, Optional
 from dotenv import load_dotenv
 from rpa.config import (
@@ -9,9 +10,13 @@ from rpa.config import (
     USAC_USER,
     ESTUDIANTE_CARNET,
     ESTUDIANTE_NOMBRE,
+    INTEGRANTES_GRUPO,
     ESTUDIANTE_CORREO,
     GRUPO_NUMERO,
     SECCION_LAB,
+    MODULO_EVALUADO,
+    PROCESO_RPA_NOMBRE,
+    AUTOMATIZACION_CORRECTA,
     REPO_GITHUB,
     ESTADO_AGENTE_DEFAULT
 )
@@ -29,10 +34,17 @@ async def completar_formulario(
     Gesto asociado: Simular escritura con el índice
 
     1. Accede al formulario de Google Forms configurado en .env.
-    2. Identifica los campos requeridos (Carné, Nombre, Correo, Grupo, Sección, Repo, Estado).
-    3. Rellena las respuestas y selecciona las opciones correspondientes.
-    4. Valida que los campos requeridos hayan sido completados.
-    5. Envía el formulario y confirma el mensaje de respuesta de Google Forms.
+    2. Identifica dinámicamente todos los tipos de preguntas:
+       - Número de grupo
+       - Nombre completo de los integrantes
+       - Módulo del proyecto evaluado 
+       - Proceso RPA a registrar
+       - Validación de automatización 
+       - Fecha de ejecución en tiempo real 
+       - Hora de ejecución en tiempo real 
+       - Compatibilidad con Carnet, Correo, Sección, Repo y Estado.
+    3. Rellena las respuestas y valida los campos requeridos.
+    4. Envía el formulario y confirma el mensaje de respuesta de Google Forms.
     """
     # Recargar .env en caliente por si se actualizó FORMULARIO_URL recientemente
     load_dotenv(BASE_DIR / ".env", override=True)
@@ -46,14 +58,27 @@ async def completar_formulario(
             "message": "FORMULARIO_URL no configurada. Define la URL del formulario en el archivo .env"
         }
 
-    # Armar datos por defecto combinados con datos personalizados si se enviaron
-    user_carnet = os.getenv("USAC_USER", USAC_USER)
+    # Fecha y hora en tiempo real
+    now = datetime.now()
+    fecha_hoy = now.strftime("%Y-%m-%d")
+    hora_24 = now.strftime("%H")
+    minuto = now.strftime("%M")
+
+    user_carnet = os.getenv("ESTUDIANTE_CARNET", ESTUDIANTE_CARNET or USAC_USER)
+    nombre_estudiante = os.getenv("ESTUDIANTE_NOMBRE", ESTUDIANTE_NOMBRE)
+
     datos_finales = {
-        "carnet": os.getenv("ESTUDIANTE_CARNET", ESTUDIANTE_CARNET),
-        "nombre": os.getenv("ESTUDIANTE_NOMBRE", ESTUDIANTE_NOMBRE),
+        "carnet": user_carnet,
+        "nombre": nombre_estudiante,
+        "integrantes": os.getenv("INTEGRANTES_GRUPO", INTEGRANTES_GRUPO or nombre_estudiante),
         "correo": os.getenv("ESTUDIANTE_CORREO", ESTUDIANTE_CORREO or f"{user_carnet}@ingenieria.usac.edu.gt"),
         "grupo": os.getenv("GRUPO_NUMERO", GRUPO_NUMERO),
         "seccion": os.getenv("SECCION_LAB", SECCION_LAB),
+        "modulo": os.getenv("MODULO_EVALUADO", MODULO_EVALUADO),
+        "proceso": os.getenv("PROCESO_RPA_NOMBRE", PROCESO_RPA_NOMBRE),
+        "automatizacion_correcta": os.getenv("AUTOMATIZACION_CORRECTA", AUTOMATIZACION_CORRECTA),
+        "fecha": fecha_hoy,
+        "hora": f"{hora_24}:{minuto}",
         "repo": os.getenv("REPO_GITHUB", REPO_GITHUB),
         "estado": os.getenv("ESTADO_AGENTE", ESTADO_AGENTE_DEFAULT)
     }
@@ -62,7 +87,7 @@ async def completar_formulario(
         datos_finales.update(datos)
 
     logger.info(f"Iniciando RPA 3: Completar formulario en: {target_url}")
-    logger.info(f"Datos a registrar: Carnet={datos_finales['carnet']}, Nombre={datos_finales['nombre']}, Grupo={datos_finales['grupo']}, Sección={datos_finales['seccion']}")
+    logger.info(f"Datos a registrar: Grupo={datos_finales['grupo']}, Integrantes={datos_finales['integrantes']}, Modulo={datos_finales['modulo']}, Proceso={datos_finales['proceso']}")
 
     try:
         async with get_browser_session(headless=headless, block_heavy_resources=True) as (page, _):
@@ -85,71 +110,110 @@ async def completar_formulario(
                     continue
 
                 title = (await title_el.text_content()).strip().upper()
-                # Quitar asteriscos de campos obligatorios
-                title_clean = re.sub(r'[*]', '', title).strip()
+                title_clean = re.sub(r'[*<>\n\r]', ' ', title).strip()
 
-                # A. Carnet / CUI / Registro
-                if any(k in title_clean for k in ["CARNET", "CARNE", "REGISTRO", "CUI"]):
-                    inp = item.locator("input[type='text']")
-                    if await inp.count() > 0:
-                        await inp.fill(str(datos_finales["carnet"]))
-                        logger.info(f"   [Campo {i+1}] Carnet completado: {datos_finales['carnet']}")
-                        campos_llenados += 1
-
-                # B. Nombre Completo
-                elif any(k in title_clean for k in ["NOMBRE", "ESTUDIANTE", "ALUMNO"]):
-                    inp = item.locator("input[type='text']")
-                    if await inp.count() > 0:
-                        await inp.fill(datos_finales["nombre"])
-                        logger.info(f"   [Campo {i+1}] Nombre completado: {datos_finales['nombre']}")
-                        campos_llenados += 1
-
-                # C. Correo Institucional
-                elif any(k in title_clean for k in ["CORREO", "EMAIL", "MAIL"]):
-                    inp = item.locator("input[type='text'], input[type='email']")
-                    if await inp.count() > 0:
-                        await inp.fill(datos_finales["correo"])
-                        logger.info(f"   [Campo {i+1}] Correo completado: {datos_finales['correo']}")
-                        campos_llenados += 1
-
-                # D. Número de Grupo
-                elif any(k in title_clean for k in ["GRUPO", "EQUIPO"]):
+                # --- 1. Número de Grupo ---
+                if "NUMERO DE GRUPO" in title_clean or ("GRUPO" in title_clean and "INTEGRANTES" not in title_clean):
                     inp = item.locator("input[type='text']")
                     if await inp.count() > 0:
                         await inp.fill(str(datos_finales["grupo"]))
                         logger.info(f"   [Campo {i+1}] Grupo completado: {datos_finales['grupo']}")
                         campos_llenados += 1
 
-                # E. Sección (Opciones Radio o Texto)
+                # --- 2. Integrantes del Grupo o Nombre Completo ---
+                elif any(k in title_clean for k in ["INTEGRANTES", "NOMBRE"]):
+                    inp = item.locator("input[type='text'], textarea")
+                    if await inp.count() > 0:
+                        await inp.fill(datos_finales["integrantes"])
+                        logger.info(f"   [Campo {i+1}] Integrantes completado: {datos_finales['integrantes']}")
+                        campos_llenados += 1
+
+                # --- 3. Módulo del proyecto ---
+                elif any(k in title_clean for k in ["MÓDULO", "MODULO"]):
+                    target_mod = str(datos_finales["modulo"]).strip()
+                    radio = item.locator(f"div[role='radio'][data-value='{target_mod}'], div[role='radio']:has-text('{target_mod}')").first
+                    if await radio.count() > 0:
+                        await radio.click()
+                        logger.info(f"   [Campo {i+1}] Módulo seleccionado (radio): {target_mod}")
+                        campos_llenados += 1
+
+                # --- 4. Proceso RPA a registrar ---
+                elif any(k in title_clean for k in ["PROCESO RPA", "PROCESO"]):
+                    inp = item.locator("input[type='text'], textarea")
+                    if await inp.count() > 0:
+                        await inp.fill(datos_finales["proceso"])
+                        logger.info(f"   [Campo {i+1}] Proceso RPA completado: {datos_finales['proceso']}")
+                        campos_llenados += 1
+
+                # --- 5. Automatización completada correctamente ---
+                elif any(k in title_clean for k in ["CORRECTAMENTE", "AUTOMATIZACIÓN", "AUTOMATIZACION"]):
+                    target_resp = datos_finales["automatizacion_correcta"].strip().lower()
+                    radio = item.locator(f"div[role='radio'][data-value='{target_resp}'], div[role='radio']:has-text('{target_resp}')").first
+                    if await radio.count() > 0:
+                        await radio.click()
+                        logger.info(f"   [Campo {i+1}] Estado automatización seleccionado (radio): {target_resp}")
+                        campos_llenados += 1
+
+                # --- 6. Fecha de ejecución ---
+                elif "FECHA" in title_clean:
+                    inp_date = item.locator("input[type='date']")
+                    if await inp_date.count() > 0:
+                        await inp_date.fill(fecha_hoy)
+                        logger.info(f"   [Campo {i+1}] Fecha completada: {fecha_hoy}")
+                        campos_llenados += 1
+
+                # --- 7. Hora de ejecución ---
+                elif "HORA" in title_clean:
+                    inpHora = item.locator("input[aria-label='Hora']")
+                    if await inpHora.count() > 0:
+                        await inpHora.fill(hora_24)
+
+                    inpMin = item.locator("input[aria-label='Minuto']")
+                    if await inpMin.count() > 0:
+                        await inpMin.fill(minuto)
+
+                    logger.info(f"   [Campo {i+1}] Hora completada (24H): {hora_24}:{minuto}")
+                    campos_llenados += 1
+
+                # --- Campos anteriores de soporte (Carnet, Correo, Sección, Repo, Estado) ---
+                elif any(k in title_clean for k in ["CARNET", "CARNE", "REGISTRO", "CUI"]):
+                    inp = item.locator("input[type='text']")
+                    if await inp.count() > 0:
+                        await inp.fill(str(datos_finales["carnet"]))
+                        logger.info(f"   [Campo {i+1}] Carnet completado: {datos_finales['carnet']}")
+                        campos_llenados += 1
+
+                elif any(k in title_clean for k in ["CORREO", "EMAIL"]):
+                    inp = item.locator("input[type='text'], input[type='email']")
+                    if await inp.count() > 0:
+                        await inp.fill(datos_finales["correo"])
+                        logger.info(f"   [Campo {i+1}] Correo completado: {datos_finales['correo']}")
+                        campos_llenados += 1
+
                 elif any(k in title_clean for k in ["SECCION", "SECCIÓN"]):
                     sec_target = datos_finales["seccion"].strip().upper()
-                    # Si es selección múltiple (radio button)
                     radio = item.locator(f"div[role='radio'][data-value='{sec_target}'], div[role='radio']:has-text('{sec_target}')").first
                     if await radio.count() > 0:
                         await radio.click()
-                        logger.info(f"   [Campo {i+1}] Sección seleccionada (radio): {sec_target}")
-                        campos_llenados += 1
                     else:
                         inp = item.locator("input[type='text']")
                         if await inp.count() > 0:
                             await inp.fill(sec_target)
-                            logger.info(f"   [Campo {i+1}] Sección completada (texto): {sec_target}")
-                            campos_llenados += 1
+                    logger.info(f"   [Campo {i+1}] Sección completada: {sec_target}")
+                    campos_llenados += 1
 
-                # F. Enlace al repositorio de GitHub
                 elif any(k in title_clean for k in ["REPO", "GITHUB", "ENLACE", "LINK", "URL"]):
                     inp = item.locator("input[type='text']")
                     if await inp.count() > 0:
                         await inp.fill(datos_finales["repo"])
-                        logger.info(f"   [Campo {i+1}] Repositorio GitHub completado: {datos_finales['repo']}")
+                        logger.info(f"   [Campo {i+1}] Repositorio completado: {datos_finales['repo']}")
                         campos_llenados += 1
 
-                # G. Estado del Agente / Comentarios
-                elif any(k in title_clean for k in ["ESTADO", "AGENTE", "COMENTARIO", "OBSERVACION", "DESCRIPCION"]):
+                elif any(k in title_clean for k in ["ESTADO", "AGENTE", "COMENTARIO"]):
                     inp = item.locator("textarea, input[type='text']")
                     if await inp.count() > 0:
                         await inp.fill(datos_finales["estado"])
-                        logger.info(f"   [Campo {i+1}] Estado del agente completado.")
+                        logger.info(f"   [Campo {i+1}] Estado completado.")
                         campos_llenados += 1
 
             if campos_llenados == 0:
