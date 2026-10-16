@@ -183,7 +183,7 @@ async def descargar_material(
 
             # Función auxiliar para descargar de forma autenticada y extraer el nombre original
             async def guardar_desde_url(url_descarga: str, nombre_default: str):
-                resp = await context.request.get(url_descarga)
+                resp = await context.request.get(url_descarga, timeout=120000)
                 disposition = resp.headers.get("content-disposition", "")
                 nombre_final = nombre_default
                 if "filename=" in disposition:
